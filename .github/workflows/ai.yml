@@ -1,0 +1,96 @@
+name: ai
+on:
+  repository_dispatch:
+    types: [telegram]
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Checkout
+        id: co1
+        uses: actions/checkout@v4
+        timeout-minutes: 2
+        continue-on-error: true
+
+      - name: Checkout (retry)
+        if: steps.co1.outcome != 'success'
+        uses: actions/checkout@v4
+        timeout-minutes: 4
+
+      - name: Checkout private memory repo (public repo only)
+        if: vars.DATA_REPO != ''
+        uses: actions/checkout@v4
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          repository: ${{ vars.DATA_REPO }}
+          token: ${{ secrets.DATA_TOKEN }}
+          path: data
+
+      - name: Cache opencode
+        id: ocache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm-global
+          key: opencode-bin-v1-${{ runner.os }}
+
+      - name: Install opencode (only if not cached)
+        if: steps.ocache.outputs.cache-hit != 'true'
+        timeout-minutes: 10
+        run: |
+          npm config set prefix "$HOME/.npm-global"
+          npm install -g opencode-ai
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Agent
+        id: ai
+        timeout-minutes: 350
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          GH_API_TOKEN: ${{ github.token }}
+          MODEL: ${{ vars.OPENCODE_MODEL }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          QUIET: ${{ github.event.repository.private == false && '1' || '' }}
+        run: |
+          export PATH="$HOME/.npm-global/bin:$PATH"
+          mkdir -p outputs
+          if [ -d data/.git ]; then mkdir -p data/memory; rm -rf memory; ln -s "$PWD/data/memory" memory; fi
+          python3 agent/run.py
+
+      - name: Save changes to repo (private repo only)
+        if: always() && steps.ai.outcome != 'skipped' && github.event.repository.private == true
+        run: |
+          git config user.name "ai-bot"
+          git config user.email "ai-bot@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "ai: run ${{ github.run_number }}"
+          for i in 1 2 3; do git pull --rebase --autostash origin "$GITHUB_REF_NAME" && git push && break || sleep 3; done
+
+      - name: Save memory to the private data repo
+        if: always() && steps.ai.outcome != 'skipped' && vars.DATA_REPO != ''
+        working-directory: data
+        run: |
+          git config user.name "ai-bot"
+          git config user.email "ai-bot@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -qm "memory: run ${{ github.run_number }}"
+          for i in 1 2 3; do git pull --rebase --autostash -q && git push -q && break || sleep 3; done
+
+      - name: Tell Telegram if the agent crashed before it could report
+        if: failure() && steps.ai.outcome != 'success'
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+        run: |
+          [ -f /tmp/run_started ] && exit 0
+          CHAT=$(jq -r .client_payload.chat_id "$GITHUB_EVENT_PATH"); MID=$(jq -r .client_payload.mid "$GITHUB_EVENT_PATH")
+          curl -s "https://api.telegram.org/bot$TG_TOKEN/editMessageText" \
+            --data-urlencode "chat_id=$CHAT" --data-urlencode "message_id=$MID" \
+            --data-urlencode "text=❌ برنامه روی ماشین موقت اجرا نشد (خطا در آماده‌سازی یا کد). دوباره بفرستید." > /dev/null

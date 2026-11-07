@@ -1,0 +1,6 @@
+outputs/
+memory/
+data/
+work/
+node_modules/
+__pycache__/
