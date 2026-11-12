@@ -55,7 +55,7 @@ class CardDetailSheet private constructor(
 
         binding.playWord.setOnClickListener { playWord() }
         binding.playSentence.setOnClickListener {
-            app.tts.speak(card.sentence.ifBlank { card.sourceLine })
+            app.tts.speak(card.sourceLine.ifBlank { card.sentence })
         }
         binding.saveButton.setOnClickListener { save() }
         binding.suspendButton.setOnClickListener { toggleSuspend() }

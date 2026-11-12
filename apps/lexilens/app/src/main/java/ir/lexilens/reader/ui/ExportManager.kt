@@ -13,8 +13,17 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.io.BufferedInputStream
+import java.util.UUID
 import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+
+data class RestoreResult(
+    val documents: Int,
+    val cards: Int,
+    val skipped: Int,
+)
 
 object ExportManager {
 
@@ -92,6 +101,140 @@ object ExportManager {
             }
         } ?: error("نمی‌توان فایل پشتیبان را نوشت")
         return cards.size
+    }
+
+    fun restoreZip(context: Context, app: App, uri: Uri): RestoreResult {
+        val temp = File(context.cacheDir, "restore-${System.currentTimeMillis()}").apply { mkdirs() }
+        try {
+            val rootDir = temp.canonicalFile
+            context.contentResolver.openInputStream(uri)?.use { raw ->
+                ZipInputStream(BufferedInputStream(raw)).use { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        val name = entry.name ?: ""
+                        val target = File(rootDir, name)
+                        val canonical = target.canonicalFile
+                        if (!canonical.path.startsWith(rootDir.path + File.separator) && canonical != rootDir) {
+                            zip.closeEntry()
+                            entry = zip.nextEntry
+                            continue
+                        }
+                        if (entry.isDirectory) {
+                            canonical.mkdirs()
+                        } else {
+                            canonical.parentFile?.mkdirs()
+                            canonical.outputStream().buffered().use { out -> zip.copyTo(out) }
+                        }
+                        zip.closeEntry()
+                        entry = zip.nextEntry
+                    }
+                }
+            } ?: error("فایل پشتیبان قابل خواندن نیست")
+
+            val jsonFile = File(rootDir, "lexilens.json")
+            if (!jsonFile.exists()) error("این فایل، پشتیبان لکسی‌لنز نیست")
+            val root = JSONObject(jsonFile.readText())
+            if (root.optString("app") != "lexilens") error("این فایل، پشتیبان لکسی‌لنز نیست")
+
+            val documentArray = root.optJSONArray("documents") ?: JSONArray()
+            val idMap = HashMap<Long, Long>()
+            var restoredDocs = 0
+            for (i in 0 until documentArray.length()) {
+                val jo = documentArray.optJSONObject(i) ?: continue
+                val oldId = jo.optLong("id", i.toLong())
+                val title = jo.optString("title", "بدون عنوان").ifBlank { "بدون عنوان" }
+                val path = jo.optString("path", "")
+                val pageCount = jo.optInt("page_count", 0)
+                val existing = app.db.findDocumentByTitleAndPath(title, path)
+                val newId = existing?.id ?: app.db.insertDocument(
+                    title = title,
+                    path = path,
+                    pageCount = pageCount,
+                    addedAt = jo.optLong("added_at", System.currentTimeMillis()),
+                    lastPage = jo.optInt("last_page", 0),
+                    lastReadAt = 0L,
+                )
+                idMap[oldId] = newId
+                if (existing == null) restoredDocs++
+            }
+
+            val cardArray = root.optJSONArray("cards") ?: JSONArray()
+            var restoredCards = 0
+            var skipped = 0
+            for (i in 0 until cardArray.length()) {
+                val jo = cardArray.optJSONObject(i) ?: continue
+                val docId = idMap[jo.optLong("doc_id", -1L)] ?: continue
+                val doc = app.db.document(docId) ?: continue
+                val cropEntry = jo.optString("crop_entry", "")
+                val audioEntry = jo.optString("audio_entry", "")
+                val cropPath = copyEntry(rootDir, cropEntry, File(context.filesDir, "crops"), "restored_crop_")
+                val audioPath = copyEntry(rootDir, audioEntry, File(context.filesDir, "audio"), "restored_audio_")
+                val card = Card(
+                    id = 0L,
+                    docId = docId,
+                    word = jo.optString("word", ""),
+                    normWord = jo.optString("norm_word", ""),
+                    translation = jo.optString("translation", ""),
+                    ipa = jo.optString("ipa", ""),
+                    pos = jo.optString("pos", ""),
+                    sourceLine = jo.optString("source_line", ""),
+                    sentence = jo.optString("sentence", ""),
+                    page = jo.optInt("page", 0),
+                    cropPath = cropPath,
+                    rectL = jo.optDouble("rect_l", 0.0).toFloat(),
+                    rectT = jo.optDouble("rect_t", 0.0).toFloat(),
+                    rectR = jo.optDouble("rect_r", 0.0).toFloat(),
+                    rectB = jo.optDouble("rect_b", 0.0).toFloat(),
+                    audioPath = audioPath,
+                    createdAt = jo.optLong("created_at", System.currentTimeMillis()),
+                    dueAt = jo.optLong("due_at", System.currentTimeMillis()),
+                    intervalDays = jo.optDouble("interval_days", 0.0),
+                    ease = jo.optDouble("ease", 2.5),
+                    reps = jo.optInt("reps", 0),
+                    lapses = jo.optInt("lapses", 0),
+                    state = jo.optInt("state", CardState.NEW.ordinal),
+                    step = jo.optInt("step", 0),
+                    lastReview = jo.optLong("last_review", 0L),
+                    suspended = jo.optBoolean("suspended", false),
+                    note = jo.optString("note", ""),
+                    docTitle = doc.title,
+                )
+                if (card.word.isBlank() || card.normWord.isBlank()) {
+                    skipped++
+                    deleteQuietly(cropPath)
+                    deleteQuietly(audioPath)
+                    continue
+                }
+                val id = app.db.importCard(card)
+                if (id == -1L) {
+                    skipped++
+                    deleteQuietly(cropPath)
+                    deleteQuietly(audioPath)
+                } else {
+                    restoredCards++
+                }
+            }
+            return RestoreResult(restoredDocs, restoredCards, skipped)
+        } finally {
+            temp.deleteRecursively()
+        }
+    }
+
+    private fun copyEntry(root: File, entry: String, dir: File, prefix: String): String {
+        if (entry.isBlank()) return ""
+        val source = File(root, entry)
+        if (!source.exists() || !source.isFile) return ""
+        dir.mkdirs()
+        val ext = source.extension.ifBlank { "bin" }
+        val target = File(dir, "$prefix${UUID.randomUUID()}.$ext")
+        return runCatching {
+            source.copyTo(target, overwrite = true)
+            target.absolutePath
+        }.getOrDefault("")
+    }
+
+    private fun deleteQuietly(path: String) {
+        if (path.isNotBlank()) runCatching { File(path).delete() }
     }
 
     private fun cardJson(c: Card): JSONObject = JSONObject().apply {

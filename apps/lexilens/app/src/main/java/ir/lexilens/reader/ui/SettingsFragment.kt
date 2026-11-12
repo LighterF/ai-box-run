@@ -33,6 +33,9 @@ class SettingsFragment : Fragment() {
     private val backupLauncher = registerForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri != null) backup(uri)
     }
+    private val restoreLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) restore(uri)
+    }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View {
         _binding = FragmentSettingsBinding.inflate(inflater, container, false)
@@ -50,6 +53,9 @@ class SettingsFragment : Fragment() {
         }
         binding.rowBackup.setOnClickListener {
             backupLauncher.launch("lexilens-backup-${ExportManager.dateStamp()}.zip")
+        }
+        binding.rowRestore.setOnClickListener {
+            restoreLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
         }
     }
 
@@ -177,6 +183,28 @@ class SettingsFragment : Fragment() {
                 ).show()
             }.onFailure {
                 Snackbar.make(binding.root, "پشتیبان‌گیری نشد: ${it.message}", Snackbar.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun restore(uri: Uri) {
+        val app = requireActivity().application as App
+        val ctx = requireContext()
+        Snackbar.make(binding.root, "در حال بازخوانی پشتیبان…", Snackbar.LENGTH_INDEFINITE).show()
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { ExportManager.restoreZip(ctx, app, uri) }
+            }
+            if (_binding == null) return@launch
+            result.onSuccess { restored ->
+                Snackbar.make(
+                    binding.root,
+                    "بازیابی شد: ${TextUtils.faNumber(restored.cards)} کارت و ${TextUtils.faNumber(restored.documents)} کتاب" +
+                        if (restored.skipped > 0) " · ${TextUtils.faNumber(restored.skipped)} تکراری رد شد" else "",
+                    Snackbar.LENGTH_LONG
+                ).show()
+            }.onFailure {
+                Snackbar.make(binding.root, "بازیابی نشد: ${it.message}", Snackbar.LENGTH_LONG).show()
             }
         }
     }

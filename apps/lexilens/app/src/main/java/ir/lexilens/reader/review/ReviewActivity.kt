@@ -215,7 +215,7 @@ class ReviewActivity : AppCompatActivity() {
 
     private fun speakSentence() {
         val card = current ?: return
-        app.tts.speak(card.sentence.ifBlank { card.sourceLine }, prefs.ttsRate)
+        app.tts.speak(card.sourceLine.ifBlank { card.sentence }, prefs.ttsRate)
     }
 
     override fun onDestroy() {

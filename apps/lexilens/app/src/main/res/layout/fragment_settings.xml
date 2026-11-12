@@ -377,6 +377,55 @@
                         android:src="@drawable/ic_chevron_left"
                         app:tint="?attr/colorOnSurfaceVariant" />
                 </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="?attr/colorOutline" />
+
+                <LinearLayout
+                    android:id="@+id/row_restore"
+                    android:layout_width="match_parent"
+                    android:layout_height="58dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <ImageView
+                        android:layout_width="22dp"
+                        android:layout_height="22dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_refresh"
+                        app:tint="?attr/colorPrimary" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="12dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="بازیابی از فایل پشتیبان"
+                            android:textColor="?attr/colorOnSurface"
+                            android:textSize="14sp" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="کارت‌ها، تصویر جمله‌ها و صداها"
+                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+
+                    <ImageView
+                        android:layout_width="18dp"
+                        android:layout_height="18dp"
+                        android:contentDescription="@null"
+                        android:src="@drawable/ic_chevron_left"
+                        app:tint="?attr/colorOnSurfaceVariant" />
+                </LinearLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -385,7 +434,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="22dp"
             android:gravity="center"
-            android:text="لِکسی‌لنز ۱.۰.۰\nواژه‌نامهٔ آفلاین: ویکی‌واژه، VahidN و مجموعهٔ Shirin\nمجوز واژه‌نامه: CC-BY-SA"
+            android:text="لِکسی‌لنز ۱.۰.۱\nواژه‌نامهٔ آفلاین: ویکی‌واژه، VahidN و مجموعهٔ Shirin\nمجوز واژه‌نامه: CC-BY-SA"
             android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="11sp" />
 

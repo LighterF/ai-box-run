@@ -64,7 +64,8 @@ class PageRenderer(private val file: File) : Closeable {
                     w = (w * k).toInt().coerceAtLeast(1)
                     h = maxDim
                 }
-                val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                val config = if (targetWidth > 2600) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
+                val bitmap = Bitmap.createBitmap(w, h, config)
                 bitmap.eraseColor(Color.WHITE)
                 page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                 bitmap

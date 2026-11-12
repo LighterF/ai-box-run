@@ -43,6 +43,7 @@ class ReaderActivity : AppCompatActivity() {
     private var currentWordPage = -1
     private var activeSheet: WordLookupSheet? = null
     private val rendering = mutableSetOf<Int>()
+    private val pendingWidths = HashMap<Int, Int>()
     private var textJob: Job? = null
     private var barsVisible = true
     private var seekGuard = false
@@ -157,14 +158,26 @@ class ReaderActivity : AppCompatActivity() {
     private fun requestPage(index: Int, targetWidth: Int) {
         val r = renderer ?: return
         if (index !in 0 until r.pageCount) return
+        val target = targetWidth.coerceIn(200, 5000)
+        if (!rendering.contains(index) && target <= binding.pageView.bitmapWidth(index)) return
+        if (target > (pendingWidths[index] ?: 0)) pendingWidths[index] = target
         if (rendering.contains(index)) return
         rendering.add(index)
         lifecycleScope.launch {
-            val bmp: Bitmap? = withContext(Dispatchers.IO) {
-                runCatching { r.renderFresh(index, targetWidth) }.getOrNull()
-            }
-            if (!isFinishing && !isDestroyed && bmp != null) {
-                binding.pageView.setPageBitmap(index, bmp)
+            while (!isFinishing && !isDestroyed) {
+                val want = pendingWidths[index] ?: 0
+                if (want <= 0) break
+                pendingWidths[index] = 0
+                val bmp: Bitmap? = withContext(Dispatchers.IO) {
+                    runCatching { r.renderFresh(index, want) }.getOrNull()
+                }
+                if (bmp != null && !isFinishing && !isDestroyed) {
+                    binding.pageView.setPageBitmap(index, bmp)
+                } else if (bmp != null) {
+                    bmp.recycle()
+                }
+                val next = pendingWidths[index] ?: 0
+                if (next <= binding.pageView.bitmapWidth(index)) break
             }
             rendering.remove(index)
         }

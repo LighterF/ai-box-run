@@ -47,6 +47,7 @@ class PdfPageView @JvmOverloads constructor(
         }
 
     private val bitmaps = HashMap<Int, Bitmap>()
+    private val requestedWidths = HashMap<Int, Int>()
     private var baseScale = 1f
     private var zoom = 1f
     private var tx = 0f
@@ -92,7 +93,7 @@ class PdfPageView @JvmOverloads constructor(
             }
 
             override fun onScaleEnd(detector: ScaleGestureDetector) {
-                if (zoom <= 1.02f) resetZoom()
+                if (zoom <= 1.02f) resetZoom() else requestDetail()
             }
         })
 
@@ -107,12 +108,12 @@ class PdfPageView @JvmOverloads constructor(
                 if (scaleDetector.isInProgress) return true
                 val bmp = bitmaps[pageIndex]
                 if (isPanning(bmp)) {
-                    tx += dx
-                    ty += dy
+                    tx -= dx
+                    ty -= dy
                     clampTranslation(bmp)
                     invalidate()
                 } else if (!isTurning && zoom <= 1.01f) {
-                    dragOffset += dx
+                    dragOffset -= dx
                     invalidate()
                 }
                 return true
@@ -153,6 +154,7 @@ class PdfPageView @JvmOverloads constructor(
                     ty = e.y - contentY * baseScale * zoom
                     clampTranslation(bmp)
                     listener?.onZoomChanged(true)
+                    requestDetail()
                 }
                 invalidate()
                 return true
@@ -175,6 +177,7 @@ class PdfPageView @JvmOverloads constructor(
         pageIndex = startPage.coerceIn(0, max(0, pageCount - 1))
         bitmaps.values.forEach { if (!it.isRecycled) it.recycle() }
         bitmaps.clear()
+        requestedWidths.clear()
         resetZoom()
         recalcBase()
         requestAround()
@@ -182,15 +185,42 @@ class PdfPageView @JvmOverloads constructor(
     }
 
     fun setPageBitmap(index: Int, bitmap: Bitmap) {
+        val current = index == pageIndex
+        var focusX = 0f
+        var focusY = 0f
+        var preserveFocus = false
+        if (current && zoom > 1.01f) {
+            val previous = bitmaps[index]
+            if (previous != null && width > 0 && height > 0) {
+                val oldScale = baseScale * zoom
+                if (oldScale > 0f) {
+                    focusX = (width / 2f - tx) / oldScale
+                    focusY = (height / 2f - ty) / oldScale
+                    preserveFocus = true
+                }
+            }
+        }
         val old = bitmaps.put(index, bitmap)
         if (old != null && old !== bitmap && !old.isRecycled) old.recycle()
-        if (index == pageIndex) {
+        if (current) {
             recalcBase()
-            resetTranslationForZoom()
+            if (preserveFocus) {
+                val newScale = baseScale * zoom
+                tx = width / 2f - focusX * newScale
+                ty = height / 2f - focusY * newScale
+                clampTranslation(bitmap)
+            } else {
+                resetTranslationForZoom()
+            }
+            if (bitmap.width > DETAIL_WIDTH_THRESHOLD) {
+                recycleOtherDetailBitmaps(index)
+            }
         }
         trimCache()
         invalidate()
     }
+
+    fun bitmapWidth(index: Int): Int = bitmaps[index]?.width ?: 0
 
     fun goToPage(index: Int, animate: Boolean = false) {
         val target = index.coerceIn(0, max(0, pageCount - 1))
@@ -225,11 +255,35 @@ class PdfPageView @JvmOverloads constructor(
         val it = bitmaps.entries.iterator()
         while (it.hasNext()) {
             val e = it.next()
-            if (e.key !in keep) {
+            val drop = e.key !in keep ||
+                (e.key != pageIndex && e.value.width > DETAIL_WIDTH_THRESHOLD)
+            if (drop) {
                 if (!e.value.isRecycled) e.value.recycle()
                 it.remove()
             }
         }
+        requestedWidths.keys.retainAll(setOf(pageIndex))
+    }
+
+    private fun recycleOtherDetailBitmaps(keepIndex: Int) {
+        val it = bitmaps.entries.iterator()
+        while (it.hasNext()) {
+            val e = it.next()
+            if (e.key != keepIndex && e.value.width > DETAIL_WIDTH_THRESHOLD) {
+                if (!e.value.isRecycled) e.value.recycle()
+                it.remove()
+            }
+        }
+    }
+
+    private fun requestDetail() {
+        if (width <= 0 || height <= 0 || zoom <= 1.2f) return
+        val bmp = bitmaps[pageIndex] ?: return
+        val needed = (width * zoom * 1.15f).toInt().coerceIn(1200, MAX_DETAIL_WIDTH)
+        if (bmp.width >= (needed * 0.85f).toInt()) return
+        if ((requestedWidths[pageIndex] ?: 0) >= needed) return
+        requestedWidths[pageIndex] = needed
+        listener?.onNeedPage(pageIndex, needed)
     }
 
     private fun isPanning(bmp: Bitmap?): Boolean {
@@ -340,6 +394,7 @@ class PdfPageView @JvmOverloads constructor(
         recalcBase()
         resetTranslationForZoom()
         requestAround()
+        requestDetail()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -403,5 +458,10 @@ class PdfPageView @JvmOverloads constructor(
             parent?.requestDisallowInterceptTouchEvent(false)
         }
         return true
+    }
+
+    companion object {
+        private const val MAX_DETAIL_WIDTH = 4000
+        private const val DETAIL_WIDTH_THRESHOLD = 1800
     }
 }

@@ -1,6 +1,5 @@
 package ir.lexilens.reader.review
 
-import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -11,13 +10,11 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.text.Layout
 import android.text.StaticLayout
+import android.text.TextDirectionHeuristics
 import android.text.TextPaint
 import android.util.AttributeSet
 import android.view.View
-import android.view.animation.DecelerateInterpolator
-import ir.lexilens.reader.util.TextUtils
 import java.io.File
-import kotlin.math.min
 
 class ContextHighlightView @JvmOverloads constructor(
     context: Context,
@@ -30,21 +27,15 @@ class ContextHighlightView @JvmOverloads constructor(
     private var line = ""
     private var textLayout: StaticLayout? = null
 
-    private var progress = 0f
-    private var sweep: ValueAnimator? = null
-    private var pulse: ValueAnimator? = null
-
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = dp(1f)
         color = Color.argb(40, 0, 0, 0)
     }
-    private val highlight = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(245, 158, 11) }
-    private val underline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(217, 119, 6)
-        strokeWidth = dp(2f)
-        strokeCap = Paint.Cap.ROUND
+    private val highlight = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(255, 213, 79)
+        alpha = HIGHLIGHT_ALPHA
     }
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = sp(16f)
@@ -55,74 +46,29 @@ class ContextHighlightView @JvmOverloads constructor(
     private val paperBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(247, 245, 238) }
 
     fun setCrop(path: String, l: Float, t: Float, r: Float, b: Float, word: String) {
-        cancelAnimations()
+        bitmap?.recycle()
         this.word = word
         line = ""
         textLayout = null
-        bitmap?.recycle()
         bitmap = runCatching {
             val opts = BitmapFactory.Options().apply { inPreferredConfig = Bitmap.Config.ARGB_8888 }
             BitmapFactory.decodeFile(File(path).absolutePath, opts)
         }.getOrNull()
         hl = RectF(l.coerceIn(0f, 1f), t.coerceIn(0f, 1f), r.coerceIn(0f, 1f), b.coerceIn(0f, 1f))
         if (hl.right <= hl.left) hl.right = (hl.left + 0.12f).coerceAtMost(1f)
-        if (hl.bottom <= hl.top) hl.bottom = (hl.top + 0.35f).coerceAtMost(1f)
-        progress = 0f
+        if (hl.bottom <= hl.top) hl.bottom = (hl.top + 0.18f).coerceAtMost(1f)
         requestLayout()
         invalidate()
-        startSweep()
     }
 
     fun setText(line: String, word: String) {
-        cancelAnimations()
         bitmap?.recycle()
         bitmap = null
         this.line = line
         this.word = word
         textLayout = null
-        progress = 0f
         requestLayout()
         invalidate()
-        startSweep()
-    }
-
-    private fun startSweep() {
-        val anim = ValueAnimator.ofFloat(0f, 1f)
-        anim.duration = 850
-        anim.interpolator = DecelerateInterpolator(1.6f)
-        anim.addUpdateListener {
-            progress = it.animatedValue as Float
-            invalidate()
-        }
-        anim.addListener(object : android.animation.AnimatorListenerAdapter() {
-            override fun onAnimationEnd(animation: android.animation.Animator) {
-                startPulse()
-            }
-        })
-        sweep = anim
-        anim.start()
-    }
-
-    private fun startPulse() {
-        val anim = ValueAnimator.ofFloat(0f, 1f, 0.35f)
-        anim.duration = 2600
-        anim.repeatCount = 2
-        anim.addUpdateListener {
-            progress = 1f
-            pulseAlpha = it.animatedValue as Float
-            invalidate()
-        }
-        pulse = anim
-        anim.start()
-    }
-
-    private var pulseAlpha = 0.3f
-
-    private fun cancelAnimations() {
-        sweep?.cancel(); sweep = null
-        pulse?.cancel(); pulse = null
-        progress = 0f
-        pulseAlpha = 0.3f
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -141,10 +87,10 @@ class ContextHighlightView @JvmOverloads constructor(
     }
 
     private fun buildTextLayout(avail: Int): StaticLayout {
-        val safe = TextUtils.normalizeWord(line).ifEmpty { line }
-        val source = if (safe.isEmpty()) "…" else line.ifEmpty { line }
+        val source = if (line.isEmpty()) "…" else line
         return StaticLayout.Builder.obtain(source, 0, source.length, textPaint, avail)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+            .setTextDirection(TextDirectionHeuristics.LTR)
             .setLineSpacing(dp(3f), 1f)
             .setIncludePad(false)
             .build()
@@ -163,9 +109,7 @@ class ContextHighlightView @JvmOverloads constructor(
         clipPath.addRoundRect(dst, radius, radius, Path.Direction.CW)
         canvas.save()
         canvas.clipPath(clipPath)
-        // Fill letterbox areas with a soft paper tone.
         canvas.drawColor(Color.rgb(247, 245, 238))
-        // Fit width, center vertically.
         val scale = width.toFloat() / bmp.width
         val drawH = bmp.height * scale
         val top = (height - drawH) / 2f
@@ -178,6 +122,12 @@ class ContextHighlightView @JvmOverloads constructor(
             img.left + hl.right * img.width(),
             img.top + hl.bottom * img.height(),
         )
+        if (hr.height() > img.height() * 0.45f) {
+            val bandHeight = (img.height() * 0.14f).coerceAtLeast(dp(6f))
+            val center = hr.centerY()
+            hr.top = center - bandHeight / 2f
+            hr.bottom = center + bandHeight / 2f
+        }
         drawHighlight(canvas, hr)
         canvas.restore()
         canvas.drawRoundRect(dst, radius, radius, border)
@@ -194,52 +144,46 @@ class ContextHighlightView @JvmOverloads constructor(
 
         val source = layout.text.toString()
         val wordIdx = source.indexOf(word, ignoreCase = true)
-        val lineForWord = if (wordIdx >= 0) layout.getLineForOffset(wordIdx) else 0
-        val lineStart = layout.getLineStart(lineForWord)
-        val lineText = source.subSequence(lineStart, layout.getLineEnd(lineForWord)).toString()
-        val idx = lineText.indexOf(word, ignoreCase = true).coerceAtLeast(0)
-        val startX = layout.getPrimaryHorizontal(lineStart + idx)
-        val endX = layout.getPrimaryHorizontal((lineStart + idx + word.length).coerceAtMost(source.length))
-        val baseline = layout.getLineBaseline(lineForWord)
-        val top = (baseline - textPaint.textSize * 1.15f)
-        val hr = RectF(
-            startX - dp(2f),
-            top,
-            endX + dp(2f),
-            baseline + textPaint.textSize * 0.22f,
-        )
-        drawHighlight(canvas, hr)
+        if (wordIdx >= 0 && word.isNotEmpty()) {
+            val lineForWord = layout.getLineForOffset(wordIdx)
+            val lineStart = layout.getLineStart(lineForWord)
+            val lineEnd = layout.getLineEnd(lineForWord)
+            val lineText = source.subSequence(lineStart, lineEnd).toString()
+            val idx = lineText.indexOf(word, ignoreCase = true).coerceAtLeast(0)
+            val start = (lineStart + idx).coerceIn(0, source.length)
+            val end = (start + word.length).coerceIn(start, source.length)
+            val startX = layout.getPrimaryHorizontal(start)
+            val endX = layout.getPrimaryHorizontal(end)
+            val top = layout.getLineTop(lineForWord).toFloat() + dp(1f)
+            val bottom = layout.getLineBottom(lineForWord).toFloat() - dp(1f)
+            if (endX > startX && bottom > top) {
+                drawHighlight(
+                    canvas,
+                    RectF(startX - dp(2f), top, endX + dp(2f), bottom),
+                )
+            }
+        }
         layout.draw(canvas)
         canvas.restore()
     }
 
     private fun drawHighlight(canvas: Canvas, full: RectF) {
         if (full.width() <= 0f || full.height() <= 0f) return
-        val p = progress.coerceIn(0f, 1f)
-        val eased = 1f - (1f - p) * (1f - p)
-        val hr = RectF(full.left, full.top, full.left + full.width() * eased, full.bottom)
-        val baseAlpha = 120
-        val alpha = if (p >= 1f) (baseAlpha * (0.55f + 0.35f * pulseAlpha)).toInt().coerceIn(45, 150) else baseAlpha
-        highlight.alpha = alpha
-        canvas.drawRoundRect(hr, dp(4f), dp(4f), highlight)
-        if (p > 0.15f) {
-            canvas.drawLine(
-                hr.left + dp(2f),
-                hr.bottom - dp(1.5f),
-                (hr.left + hr.width() * 0.98f).coerceAtLeast(hr.left + dp(2f)),
-                hr.bottom - dp(1.5f),
-                underline
-            )
-        }
+        highlight.alpha = HIGHLIGHT_ALPHA
+        canvas.drawRoundRect(full, dp(3f), dp(3f), highlight)
     }
 
     override fun onDetachedFromWindow() {
-        cancelAnimations()
         bitmap?.recycle()
         bitmap = null
         super.onDetachedFromWindow()
     }
 
     private fun dp(v: Float): Float = v * resources.displayMetrics.density
+
     private fun sp(v: Float): Float = v * resources.displayMetrics.scaledDensity
+
+    private companion object {
+        const val HIGHLIGHT_ALPHA = 58
+    }
 }
