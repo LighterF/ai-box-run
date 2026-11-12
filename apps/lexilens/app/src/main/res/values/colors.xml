@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ink">#0B1512</color>
+    <color name="ink_soft">#14231E</color>
+    <color name="paper">#F6F4ED</color>
+    <color name="paper_card">#FFFFFF</color>
+    <color name="teal">#0F766E</color>
+    <color name="teal_dark">#0B5A54</color>
+    <color name="teal_light">#CCFBF1</color>
+    <color name="amber">#F59E0B</color>
+    <color name="amber_soft">#FEF3C7</color>
+    <color name="rose">#E11D48</color>
+    <color name="muted">#64748B</color>
+    <color name="line">#E2E8F0</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="scrim">#99000000</color>
+</resources>
