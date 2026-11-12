@@ -130,7 +130,7 @@ class ContextHighlightView @JvmOverloads constructor(
         val w = if (width > 0) width else resources.displayMetrics.widthPixels
         val bmp = bitmap
         val h = when {
-            bmp != null -> (w.toFloat() * bmp.height / bmp.width).toInt().coerceIn(dp(68f).toInt(), dp(280f).toInt())
+            bmp != null -> (w.toFloat() * bmp.height / bmp.width).toInt().coerceIn(dp(48f).toInt(), dp(280f).toInt())
             else -> {
                 val layout = buildTextLayout((w - dp(22f)).toInt())
                 textLayout = layout

@@ -54,7 +54,11 @@ class PdfTextExtractor(
     private fun readCache(pageIndex: Int): PageText? {
         val f = cacheFile(pageIndex)
         if (!f.exists()) return null
-        return runCatching { PageText.fromJson(JSONObject(f.readText())) }.getOrNull()
+        return runCatching {
+            val json = JSONObject(f.readText())
+            if (json.optInt("v", 0) < 2) return null
+            PageText.fromJson(json)
+        }.getOrNull()
     }
 
     private fun writeCache(pageIndex: Int, pageText: PageText) {
@@ -109,12 +113,14 @@ class PdfTextExtractor(
             val chars = positions.mapNotNull { p ->
                 val unicode = p.unicode ?: return@mapNotNull null
                 if (unicode.isEmpty()) return@mapNotNull null
+                val gh = p.heightDir.coerceAtLeast(1f)
                 CharBox(
                     text = unicode,
                     x = p.xDirAdj,
-                    y = p.yDirAdj,
+                    // yDirAdj is the baseline; shift up so boxes cover the glyph.
+                    y = p.yDirAdj - gh,
                     w = p.widthDirAdj.coerceAtLeast(1f),
-                    h = p.heightDir.coerceAtLeast(1f),
+                    h = gh * 1.25f,
                     space = p.widthOfSpace.takeIf { it.isFinite() && it > 0f } ?: 0f,
                 )
             }.filter { it.text.any { ch -> !ch.isWhitespace() } }

@@ -87,7 +87,7 @@ data class PageText(
 
     fun toJson(): JSONObject {
         val root = JSONObject()
-        root.put("v", 1)
+        root.put("v", 2)
         root.put("width", width.toDouble())
         root.put("height", height.toDouble())
         root.put("rotation", rotation)

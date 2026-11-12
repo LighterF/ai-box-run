@@ -30,11 +30,12 @@ object ContextImageFactory {
             val wordRect = mapRect(word.x, word.y, word.w, word.h, pageText, page)
 
             val padX = (lineRect.height() * 1.2f).coerceAtLeast(8f)
-            val padY = (lineRect.height() * 0.55f).coerceAtLeast(4f)
+            val padTop = (lineRect.height() * 0.8f).coerceAtLeast(6f)
+            val padBottom = (lineRect.height() * 2.2f).coerceAtLeast(10f)
             var x0 = (lineRect.left - padX).toInt().coerceAtLeast(0)
-            var y0 = (lineRect.top - padY).toInt().coerceAtLeast(0)
+            var y0 = (lineRect.top - padTop).toInt().coerceAtLeast(0)
             var x1 = (lineRect.left + lineRect.width() + padX).toInt().coerceAtMost(page.width)
-            var y1 = (lineRect.top + lineRect.height() + padY).toInt().coerceAtMost(page.height)
+            var y1 = (lineRect.top + lineRect.height() + padBottom).toInt().coerceAtMost(page.height)
 
             // Give very short lines a wider, more readable crop.
             val minWidth = (page.width * 0.28f).toInt()
