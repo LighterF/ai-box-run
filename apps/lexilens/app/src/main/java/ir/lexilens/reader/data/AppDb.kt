@@ -80,6 +80,14 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "lexilens.db", null, 1
     }
 
     fun addDocument(title: String, path: String, pageCount: Int): Long {
+        val orphan = findDocumentByTitleAndPath(title, "")
+        if (orphan != null) {
+            writableDatabase.execSQL(
+                "UPDATE documents SET path = ?, page_count = ? WHERE id = ?",
+                arrayOf<Any>(path, pageCount, orphan.id)
+            )
+            return orphan.id
+        }
         return insertDocument(
             title = title,
             path = path,
@@ -114,6 +122,18 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "lexilens.db", null, 1
             "SELECT d.*, (SELECT COUNT(*) FROM cards c WHERE c.doc_id = d.id) AS card_count " +
                 "FROM documents d WHERE d.title = ? AND d.path = ? LIMIT 1",
             arrayOf(title, path)
+        )
+        cursor.use {
+            return if (it.moveToFirst()) readDocument(it) else null
+        }
+    }
+
+    fun findDocumentByTitle(title: String): Document? {
+        val cursor = readableDatabase.rawQuery(
+            "SELECT d.*, (SELECT COUNT(*) FROM cards c WHERE c.doc_id = d.id) AS card_count " +
+                "FROM documents d WHERE d.title = ? AND d.path <> '' " +
+                "ORDER BY d.last_read_at DESC, d.added_at DESC LIMIT 1",
+            arrayOf(title)
         )
         cursor.use {
             return if (it.moveToFirst()) readDocument(it) else null

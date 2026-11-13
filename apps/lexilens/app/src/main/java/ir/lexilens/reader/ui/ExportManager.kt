@@ -145,7 +145,12 @@ object ExportManager {
                 val title = jo.optString("title", "بدون عنوان").ifBlank { "بدون عنوان" }
                 val path = jo.optString("path", "")
                 val pageCount = jo.optInt("page_count", 0)
-                val existing = app.db.findDocumentByTitleAndPath(title, path)
+                val existing = if (path.isBlank()) {
+                    app.db.findDocumentByTitle(title)
+                        ?: app.db.findDocumentByTitleAndPath(title, "")
+                } else {
+                    app.db.findDocumentByTitleAndPath(title, path)
+                }
                 val newId = existing?.id ?: app.db.insertDocument(
                     title = title,
                     path = path,
