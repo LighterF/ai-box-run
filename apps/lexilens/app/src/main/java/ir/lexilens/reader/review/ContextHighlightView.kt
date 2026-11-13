@@ -7,6 +7,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.text.Layout
 import android.text.StaticLayout
@@ -34,8 +36,13 @@ class ContextHighlightView @JvmOverloads constructor(
         color = Color.argb(40, 0, 0, 0)
     }
     private val highlight = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(255, 213, 79)
+        color = Color.rgb(255, 226, 120)
         alpha = HIGHLIGHT_ALPHA
+    }
+    // Multiply keeps the black glyphs black while tinting only the paper.
+    private val imageHighlight = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(255, 226, 120)
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.MULTIPLY)
     }
     private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = sp(16f)
@@ -122,13 +129,7 @@ class ContextHighlightView @JvmOverloads constructor(
             img.left + hl.right * img.width(),
             img.top + hl.bottom * img.height(),
         )
-        if (hr.height() > img.height() * 0.45f) {
-            val bandHeight = (img.height() * 0.14f).coerceAtLeast(dp(6f))
-            val center = hr.centerY()
-            hr.top = center - bandHeight / 2f
-            hr.bottom = center + bandHeight / 2f
-        }
-        drawHighlight(canvas, hr)
+        drawHighlight(canvas, hr, imageHighlight)
         canvas.restore()
         canvas.drawRoundRect(dst, radius, radius, border)
     }
@@ -160,6 +161,7 @@ class ContextHighlightView @JvmOverloads constructor(
                 drawHighlight(
                     canvas,
                     RectF(startX - dp(2f), top, endX + dp(2f), bottom),
+                    highlight,
                 )
             }
         }
@@ -167,10 +169,9 @@ class ContextHighlightView @JvmOverloads constructor(
         canvas.restore()
     }
 
-    private fun drawHighlight(canvas: Canvas, full: RectF) {
+    private fun drawHighlight(canvas: Canvas, full: RectF, paint: Paint) {
         if (full.width() <= 0f || full.height() <= 0f) return
-        highlight.alpha = HIGHLIGHT_ALPHA
-        canvas.drawRoundRect(full, dp(3f), dp(3f), highlight)
+        canvas.drawRoundRect(full, dp(2.5f), dp(2.5f), paint)
     }
 
     override fun onDetachedFromWindow() {
@@ -184,6 +185,6 @@ class ContextHighlightView @JvmOverloads constructor(
     private fun sp(v: Float): Float = v * resources.displayMetrics.scaledDensity
 
     private companion object {
-        const val HIGHLIGHT_ALPHA = 58
+        const val HIGHLIGHT_ALPHA = 48
     }
 }

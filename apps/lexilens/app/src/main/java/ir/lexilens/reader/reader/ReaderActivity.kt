@@ -105,6 +105,51 @@ class ReaderActivity : AppCompatActivity() {
             override fun onZoomChanged(zoomed: Boolean) {
                 if (zoomed && barsVisible) toggleBars()
             }
+
+            override fun onNeedTile(
+                index: Int,
+                pageLeft: Float,
+                pageTop: Float,
+                pageRight: Float,
+                pageBottom: Float,
+                outWidth: Int,
+                outHeight: Int,
+                token: Int,
+            ) {
+                val r = renderer ?: return
+                lifecycleScope.launch {
+                    val bmp = withContext(Dispatchers.IO) {
+                        runCatching {
+                            r.renderRegion(
+                                index,
+                                pageLeft,
+                                pageTop,
+                                pageRight,
+                                pageBottom,
+                                outWidth,
+                                outHeight,
+                            )
+                        }.getOrNull()
+                    }
+                    if (isFinishing || isDestroyed) {
+                        bmp?.recycle()
+                        return@launch
+                    }
+                    if (bmp != null) {
+                        binding.pageView.setPageTile(
+                            index,
+                            token,
+                            pageLeft,
+                            pageTop,
+                            pageRight,
+                            pageBottom,
+                            bmp,
+                        )
+                    } else {
+                        binding.pageView.tileFailed(index, token)
+                    }
+                }
+            }
         }
         binding.pageView.setDocument(renderer!!, pageCount, loaded.lastPage)
         updatePageUi(binding.pageView.pageIndex)

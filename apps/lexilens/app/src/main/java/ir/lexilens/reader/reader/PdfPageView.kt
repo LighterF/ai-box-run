@@ -18,6 +18,8 @@ import ir.lexilens.reader.pdf.PageRenderer
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 class PdfPageView @JvmOverloads constructor(
     context: Context,
@@ -30,6 +32,18 @@ class PdfPageView @JvmOverloads constructor(
         fun onLongPressPage(index: Int, nx: Float, ny: Float, viewX: Float, viewY: Float)
         fun onTap()
         fun onZoomChanged(zoomed: Boolean)
+
+        fun onNeedTile(
+            index: Int,
+            pageLeft: Float,
+            pageTop: Float,
+            pageRight: Float,
+            pageBottom: Float,
+            outWidth: Int,
+            outHeight: Int,
+            token: Int,
+        ) {}
+        fun onTileFailed(index: Int, token: Int) {}
     }
 
     var listener: Listener? = null
@@ -48,6 +62,13 @@ class PdfPageView @JvmOverloads constructor(
 
     private val bitmaps = HashMap<Int, Bitmap>()
     private val requestedWidths = HashMap<Int, Int>()
+    private var tile: Bitmap? = null
+    private val tilePageRect = RectF()
+    private var tilePage = -1
+    private var tileToken = 0
+    private var tilePendingKey: String? = null
+    private var tileLastKey: String? = null
+    private val tileRetry = Runnable { maybeRequestTile() }
     private var baseScale = 1f
     private var zoom = 1f
     private var tx = 0f
@@ -89,11 +110,17 @@ class PdfPageView @JvmOverloads constructor(
                 clampTranslation(bmp)
                 listener?.onZoomChanged(zoom > 1.01f)
                 invalidate()
+                scheduleTile()
                 return true
             }
 
             override fun onScaleEnd(detector: ScaleGestureDetector) {
-                if (zoom <= 1.02f) resetZoom() else requestDetail()
+                if (zoom <= 1.02f) {
+                    resetZoom()
+                } else {
+                    requestDetail()
+                    maybeRequestTile()
+                }
             }
         })
 
@@ -116,13 +143,14 @@ class PdfPageView @JvmOverloads constructor(
                     dragOffset -= dx
                     invalidate()
                 }
+                scheduleTile()
                 return true
             }
 
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
                 if (isPanning(bitmaps[pageIndex])) return false
                 if (abs(dragOffset) > 20f || abs(vx) > 450f) {
-                    val forward = if (abs(dragOffset) > 20f) dragOffset < 0 else vx < 0
+                    val forward = if (abs(dragOffset) > 20f) dragOffset > 0 else vx > 0
                     commitTurn(forward)
                 } else {
                     animateDragBack()
@@ -155,6 +183,7 @@ class PdfPageView @JvmOverloads constructor(
                     clampTranslation(bmp)
                     listener?.onZoomChanged(true)
                     requestDetail()
+                    maybeRequestTile()
                 }
                 invalidate()
                 return true
@@ -178,6 +207,7 @@ class PdfPageView @JvmOverloads constructor(
         bitmaps.values.forEach { if (!it.isRecycled) it.recycle() }
         bitmaps.clear()
         requestedWidths.clear()
+        clearTile()
         resetZoom()
         recalcBase()
         requestAround()
@@ -217,6 +247,7 @@ class PdfPageView @JvmOverloads constructor(
             }
         }
         trimCache()
+        if (current) maybeRequestTile()
         invalidate()
     }
 
@@ -226,6 +257,7 @@ class PdfPageView @JvmOverloads constructor(
         val target = index.coerceIn(0, max(0, pageCount - 1))
         if (target == pageIndex) return
         pageIndex = target
+        clearTile()
         resetZoom()
         recalcBase()
         requestAround()
@@ -236,6 +268,7 @@ class PdfPageView @JvmOverloads constructor(
     fun currentBitmap(): Bitmap? = bitmaps[pageIndex]
 
     fun release() {
+        clearTile()
         bitmaps.values.forEach { if (!it.isRecycled) it.recycle() }
         bitmaps.clear()
         listener = null
@@ -285,6 +318,105 @@ class PdfPageView @JvmOverloads constructor(
         requestedWidths[pageIndex] = needed
         listener?.onNeedPage(pageIndex, needed)
     }
+
+    fun setPageTile(
+        index: Int,
+        token: Int,
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        bitmap: Bitmap,
+    ) {
+        if (index != pageIndex || token != tileToken) {
+            if (!bitmap.isRecycled) bitmap.recycle()
+            return
+        }
+        tilePendingKey = null
+        tileLastKey = tileKey(left, top, right, bottom, bitmap.width, bitmap.height)
+        tile?.let { if (!it.isRecycled) it.recycle() }
+        tile = bitmap
+        tilePage = index
+        tilePageRect.set(left, top, right, bottom)
+        invalidate()
+    }
+
+    fun tileFailed(index: Int, token: Int) {
+        if (index != pageIndex || token != tileToken) return
+        tileLastKey = tilePendingKey
+        tilePendingKey = null
+    }
+
+    private fun scheduleTile() {
+        removeCallbacks(tileRetry)
+        postDelayed(tileRetry, 140L)
+    }
+
+    private fun clearTile() {
+        removeCallbacks(tileRetry)
+        tile?.let { if (!it.isRecycled) it.recycle() }
+        tile = null
+        tilePage = -1
+        tilePageRect.setEmpty()
+        tileToken++
+        tilePendingKey = null
+        tileLastKey = null
+    }
+
+    private fun maybeRequestTile() {
+        val bmp = bitmaps[pageIndex] ?: return
+        val r = renderer ?: return
+        if (zoom <= 1.2f || width <= 0 || height <= 0) return
+        val (pageW, pageH) = runCatching { r.pageSize(pageIndex) }.getOrNull() ?: return
+        val pw = pageW.toFloat()
+        val ph = pageH.toFloat()
+        if (pw <= 1f || ph <= 1f) return
+        val drawScale = baseScale * zoom
+        if (drawScale <= 0f) return
+        val pageDrawW = bmp.width * drawScale
+        val pageDrawH = bmp.height * drawScale
+        if (pageDrawW <= 0f || pageDrawH <= 0f) return
+
+        val nx0 = ((0f - tx) / pageDrawW).coerceIn(0f, 1f)
+        val ny0 = ((0f - ty) / pageDrawH).coerceIn(0f, 1f)
+        val nx1 = ((width - tx) / pageDrawW).coerceIn(0f, 1f)
+        val ny1 = ((height - ty) / pageDrawH).coerceIn(0f, 1f)
+        if (nx1 - nx0 < 0.02f || ny1 - ny0 < 0.02f) return
+
+        val marginX = (nx1 - nx0) * 0.35f
+        val marginY = (ny1 - ny0) * 0.35f
+        val nLeft = (nx0 - marginX).coerceAtLeast(0f)
+        val nTop = (ny0 - marginY).coerceAtLeast(0f)
+        val nRight = (nx1 + marginX).coerceAtMost(1f)
+        val nBottom = (ny1 + marginY).coerceAtMost(1f)
+
+        val left = nLeft * pw
+        val top = nTop * ph
+        val right = nRight * pw
+        val bottom = nBottom * ph
+        if (right - left < 1f || bottom - top < 1f) return
+
+        val pxPerPoint = pageDrawW / pw
+        var outW = ((right - left) * pxPerPoint * 1.25f).roundToInt().coerceAtLeast(1)
+        var outH = ((bottom - top) * pxPerPoint * 1.25f).roundToInt().coerceAtLeast(1)
+        val scaleDown = minOf(
+            1f,
+            MAX_TILE_DIM.toFloat() / outW,
+            MAX_TILE_DIM.toFloat() / outH,
+            sqrt(MAX_TILE_PIXELS.toDouble() / (outW.toDouble() * outH)).toFloat(),
+        )
+        outW = (outW * scaleDown).roundToInt().coerceAtLeast(1)
+        outH = (outH * scaleDown).roundToInt().coerceAtLeast(1)
+
+        val key = tileKey(left, top, right, bottom, outW, outH)
+        if (key == tilePendingKey || key == tileLastKey) return
+        tilePendingKey = key
+        val token = ++tileToken
+        listener?.onNeedTile(pageIndex, left, top, right, bottom, outW, outH, token)
+    }
+
+    private fun tileKey(l: Float, t: Float, r: Float, b: Float, w: Int, h: Int): String =
+        "${pageIndex}:${l.toInt()}:${t.toInt()}:${r.toInt()}:${b.toInt()}:$w:$h"
 
     private fun isPanning(bmp: Bitmap?): Boolean {
         if (zoom > 1.01f) return true
@@ -342,6 +474,7 @@ class PdfPageView @JvmOverloads constructor(
         zoom = 1f
         dragOffset = 0f
         isTurning = false
+        clearTile()
         resetTranslationForZoom()
         listener?.onZoomChanged(false)
     }
@@ -354,7 +487,8 @@ class PdfPageView @JvmOverloads constructor(
             return
         }
         isTurning = true
-        val direction = if (forward) -1f else 1f
+        // RTL page flow: the next page sits on the left, the previous on the right.
+        val direction = if (forward) 1f else -1f
         val animator = ValueAnimator.ofFloat(dragOffset, direction * width)
         animator.duration = 220
         animator.interpolator = DecelerateInterpolator()
@@ -389,12 +523,18 @@ class PdfPageView @JvmOverloads constructor(
         animator.start()
     }
 
+    override fun onDetachedFromWindow() {
+        clearTile()
+        super.onDetachedFromWindow()
+    }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         recalcBase()
         resetTranslationForZoom()
         requestAround()
         requestDetail()
+        maybeRequestTile()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -414,7 +554,7 @@ class PdfPageView @JvmOverloads constructor(
         )
 
         if (abs(dragOffset) > 0.5f && zoom <= 1.01f) {
-            val neighborIndex = if (dragOffset > 0) pageIndex - 1 else pageIndex + 1
+            val neighborIndex = if (dragOffset > 0) pageIndex + 1 else pageIndex - 1
             val neighbor = bitmaps[neighborIndex]
             if (neighbor != null) {
                 val nx = if (dragOffset > 0) tx - width + dragOffset else tx + width + dragOffset
@@ -424,12 +564,30 @@ class PdfPageView @JvmOverloads constructor(
         }
 
         canvas.drawBitmap(bmp, null, dst, bitmapPaint)
+        drawTile(canvas, bmp, drawScale)
         val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
             strokeWidth = 1f
             color = Color.argb(45, 255, 255, 255)
         }
         canvas.drawRect(dst, border)
+    }
+
+    private fun drawTile(canvas: Canvas, base: Bitmap, drawScale: Float) {
+        val tileBmp = tile ?: return
+        if (zoom <= 1.01f || tilePage != pageIndex) return
+        val r = renderer ?: return
+        val (pageW, pageH) = runCatching { r.pageSize(pageIndex) }.getOrNull() ?: return
+        if (pageW <= 1 || pageH <= 1) return
+        val pppX = base.width * drawScale / pageW
+        val pppY = base.height * drawScale / pageH
+        val dst = RectF(
+            tx + dragOffset + tilePageRect.left * pppX,
+            ty + tilePageRect.top * pppY,
+            tx + dragOffset + tilePageRect.right * pppX,
+            ty + tilePageRect.bottom * pppY,
+        )
+        canvas.drawBitmap(tileBmp, null, dst, bitmapPaint)
     }
 
     private fun drawSpinner(canvas: Canvas) {
@@ -450,18 +608,21 @@ class PdfPageView @JvmOverloads constructor(
         ) {
             if (!isTurning && abs(dragOffset) > 0f && zoom <= 1.01f) {
                 if (abs(dragOffset) > width * 0.22f) {
-                    commitTurn(dragOffset < 0)
+                    commitTurn(dragOffset > 0)
                 } else {
                     animateDragBack()
                 }
             }
             parent?.requestDisallowInterceptTouchEvent(false)
+            maybeRequestTile()
         }
         return true
     }
 
     companion object {
-        private const val MAX_DETAIL_WIDTH = 4000
+        private const val MAX_DETAIL_WIDTH = 3000
         private const val DETAIL_WIDTH_THRESHOLD = 1800
+        private const val MAX_TILE_DIM = 4096
+        private const val MAX_TILE_PIXELS = 10_000_000L
     }
 }

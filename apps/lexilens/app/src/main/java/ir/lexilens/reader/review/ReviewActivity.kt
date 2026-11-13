@@ -115,11 +115,12 @@ class ReviewActivity : AppCompatActivity() {
         binding.noteText.text = if (card.note.isBlank()) "" else "یادداشت: ${card.note}"
         binding.noteText.visibility = if (card.note.isBlank()) View.GONE else View.VISIBLE
         binding.pageBadge.text = "صفحهٔ ${TextUtils.faNumber(card.page + 1)}"
-        binding.sourceLine.text = card.sourceLine.ifBlank { card.sentence }
+        val contextText = contextText(card)
+        binding.sourceLine.text = contextText
         if (card.cropPath.isNotBlank() && File(card.cropPath).exists()) {
             binding.contextView.setCrop(card.cropPath, card.rectL, card.rectT, card.rectR, card.rectB, card.word)
         } else {
-            binding.contextView.setText(card.sourceLine.ifBlank { card.sentence }, card.word)
+            binding.contextView.setText(contextText, card.word)
         }
         binding.progressText.text = "کارت ${TextUtils.faNumber(index + 1)} از ${TextUtils.faNumber(queue.size)}"
         binding.sessionProgress.max = queue.size
@@ -215,8 +216,15 @@ class ReviewActivity : AppCompatActivity() {
 
     private fun speakSentence() {
         val card = current ?: return
-        app.tts.speak(card.sourceLine.ifBlank { card.sentence }, prefs.ttsRate)
+        app.tts.speak(contextText(card), prefs.ttsRate)
     }
+
+    private fun contextText(card: Card): String =
+        TextUtils.excerptAround(
+            card.sourceLine.ifBlank { card.sentence },
+            card.word,
+            CONTEXT_MAX_CHARS,
+        )
 
     override fun onDestroy() {
         super.onDestroy()
@@ -226,6 +234,7 @@ class ReviewActivity : AppCompatActivity() {
     private fun dp(v: Float): Float = v * resources.displayMetrics.density
 
     companion object {
+        private const val CONTEXT_MAX_CHARS = 240
         const val EXTRA_DOC_ID = "doc_id"
         const val EXTRA_DOC_TITLE = "doc_title"
     }

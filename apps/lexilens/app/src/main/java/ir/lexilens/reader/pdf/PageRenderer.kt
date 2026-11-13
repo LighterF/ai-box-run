@@ -2,6 +2,7 @@ package ir.lexilens.reader.pdf
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Matrix
 import android.os.ParcelFileDescriptor
 import android.util.LruCache
 import java.io.Closeable
@@ -64,18 +65,60 @@ class PageRenderer(private val file: File) : Closeable {
                     w = (w * k).toInt().coerceAtLeast(1)
                     h = maxDim
                 }
-                val config = if (targetWidth > 2600) Bitmap.Config.RGB_565 else Bitmap.Config.ARGB_8888
-                val bitmap = Bitmap.createBitmap(w, h, config)
+                val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
                 bitmap.eraseColor(Color.WHITE)
-                page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
                 bitmap
             }
         }.getOrNull()
     }
 
+    /**
+     * Renders only a region of a page. The region is expressed in PDF points
+     * (the same coordinate space used by the text layer), and [outWidth] x
+     * [outHeight] is the requested raster size. This keeps zoomed text crisp
+     * without allocating a huge full-page bitmap.
+     */
+    @Synchronized
+    fun renderRegion(
+        index: Int,
+        left: Float,
+        top: Float,
+        right: Float,
+        bottom: Float,
+        outWidth: Int,
+        outHeight: Int,
+    ): Bitmap? = runCatching {
+        val rw = (right - left).coerceAtLeast(0.5f)
+        val rh = (bottom - top).coerceAtLeast(0.5f)
+        val w = outWidth.coerceIn(1, MAX_REGION_DIM)
+        val h = outHeight.coerceIn(1, MAX_REGION_DIM)
+        renderer.openPage(index).use { page ->
+            val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            bitmap.eraseColor(Color.WHITE)
+            val sx = w / rw
+            val sy = h / rh
+            val matrix = Matrix().apply {
+                setScale(sx, sy)
+                postTranslate(-left * sx, -top * sy)
+            }
+            page.render(
+                bitmap,
+                null,
+                matrix,
+                android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_PRINT,
+            )
+            bitmap
+        }
+    }.getOrNull()
+
     @Synchronized
     fun evict(index: Int) {
         cache.remove(index)
+    }
+
+    private companion object {
+        const val MAX_REGION_DIM = 4096
     }
 
     @Synchronized

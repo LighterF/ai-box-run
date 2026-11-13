@@ -39,7 +39,7 @@ class CardDetailSheet private constructor(
         binding.meta.visibility = if (meta.isBlank()) android.view.View.GONE else android.view.View.VISIBLE
         binding.translationInput.setText(card.translation)
         binding.noteInput.setText(card.note)
-        binding.sourceLine.text = card.sourceLine.ifBlank { card.sentence }
+        binding.sourceLine.text = contextText()
         binding.dueInfo.text = buildString {
             append("وضعیت: ").append(TextUtils.dueLabel(card))
             append("  ·  مرور: ").append(TextUtils.faNumber(card.reps))
@@ -50,17 +50,24 @@ class CardDetailSheet private constructor(
         if (card.cropPath.isNotBlank() && File(card.cropPath).exists()) {
             binding.contextView.setCrop(card.cropPath, card.rectL, card.rectT, card.rectR, card.rectB, card.word)
         } else {
-            binding.contextView.setText(card.sourceLine.ifBlank { card.sentence }, card.word)
+            binding.contextView.setText(contextText(), card.word)
         }
 
         binding.playWord.setOnClickListener { playWord() }
         binding.playSentence.setOnClickListener {
-            app.tts.speak(card.sourceLine.ifBlank { card.sentence })
+            app.tts.speak(contextText())
         }
         binding.saveButton.setOnClickListener { save() }
         binding.suspendButton.setOnClickListener { toggleSuspend() }
         binding.deleteButton.setOnClickListener { confirmDelete() }
     }
+
+    private fun contextText(): String =
+        TextUtils.excerptAround(
+            card.sourceLine.ifBlank { card.sentence },
+            card.word,
+            CONTEXT_MAX_CHARS,
+        )
 
     private fun playWord() {
         val f = if (card.audioPath.isNotBlank()) File(card.audioPath) else null
@@ -109,6 +116,8 @@ class CardDetailSheet private constructor(
     fun show() = dialog.show()
 
     companion object {
+        private const val CONTEXT_MAX_CHARS = 240
+
         fun show(context: Context, card: Card, onChanged: () -> Unit) {
             CardDetailSheet(context, card, onChanged).show()
         }

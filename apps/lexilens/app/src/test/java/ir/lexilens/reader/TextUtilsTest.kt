@@ -34,4 +34,29 @@ class TextUtilsTest {
     fun persianNumbers() {
         assertEquals("۱۲۳", TextUtils.faNumber(123))
     }
+
+    @Test
+    fun shortExcerptIsUnchanged() {
+        val line = "The quick brown fox jumps over the lazy dog."
+        assertEquals(line, TextUtils.excerptAround(line, "quick", 120))
+    }
+
+    @Test
+    fun longLineIsCappedAroundWord() {
+        val line = (1..80).joinToString(" ") { "word$it" } + " target " +
+            (81..160).joinToString(" ") { "word$it" }
+        val out = TextUtils.excerptAround(line, "target", 120)
+        assertTrue(out.contains("target"))
+        assertTrue("excerpt too long: ${out.length}", out.length <= 150)
+    }
+
+    @Test
+    fun excerptKeepsSentenceBoundaries() {
+        val line = "First sentence is here. The target word sits in this second sentence. " +
+            "Third sentence follows with more text that should be dropped."
+        val out = TextUtils.excerptAround(line, "target", 120)
+        assertTrue(out.contains("target"))
+        assertTrue(out.contains("second sentence"))
+        assertTrue(!out.contains("Third sentence"))
+    }
 }

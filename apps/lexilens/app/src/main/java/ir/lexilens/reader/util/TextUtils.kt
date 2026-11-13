@@ -72,6 +72,58 @@ object TextUtils {
     fun translationLines(raw: String): List<String> =
         raw.split('\n').map { it.trim() }.filter { it.isNotEmpty() }
 
+    /**
+     * Returns a readable excerpt around [word]. Long PDF lines (some generators
+     * emit a whole paragraph as one line) are cut at sentence or word
+     * boundaries so playback never reads an entire page.
+     */
+    fun excerptAround(raw: String, word: String, maxChars: Int = 220): String {
+        val text = raw.replace(Regex("\\s+"), " ").trim()
+        if (text.isEmpty()) return ""
+        if (text.length <= maxChars) return text
+        val token = word.trim()
+        val idx = if (token.isEmpty()) -1 else text.indexOf(token, ignoreCase = true)
+        if (idx < 0) return cutAtWord(text, 0, maxChars)
+
+        val endWord = (idx + token.length).coerceAtMost(text.length)
+        val budget = (maxChars - token.length).coerceAtLeast(32)
+        var start = (idx - budget / 2).coerceAtLeast(0)
+        var end = (endWord + budget / 2).coerceAtMost(text.length)
+
+        val stops = charArrayOf('.', '!', '?', ';', '۔', '\n')
+        val previousStop = if (idx > 0) text.lastIndexOfAny(stops, idx - 1) else -1
+        if (previousStop >= 0 && idx - previousStop <= 90) start = previousStop + 1
+        val nextStop = text.indexOfAny(stops, endWord)
+        if (nextStop in 0..(endWord + 90)) end = nextStop + 1
+
+        if (end - start > maxChars) {
+            start = (idx - budget / 2).coerceAtLeast(0)
+            end = (endWord + budget / 2).coerceAtMost(text.length)
+        }
+        if (start > 0) {
+            val space = text.lastIndexOf(' ', start)
+            if (space >= 0) start = space + 1
+        }
+        if (end < text.length) {
+            val space = text.indexOf(' ', end)
+            if (space >= 0) end = space
+        }
+        val core = text.substring(start, end).trim()
+        val prefix = if (start > 0) "… " else ""
+        val suffix = if (end < text.length) " …" else ""
+        return prefix + core + suffix
+    }
+
+    private fun cutAtWord(text: String, start: Int, maxChars: Int): String {
+        var end = (start + maxChars).coerceAtMost(text.length)
+        if (end < text.length) {
+            val space = text.indexOf(' ', end)
+            if (space >= 0) end = space
+        }
+        val core = text.substring(start, end).trim()
+        return if (start > 0) "… $core …" else "$core …"
+    }
+
     fun firstTranslation(raw: String): String = translationLines(raw).firstOrNull().orEmpty()
 
     fun faDigits(input: String): String {

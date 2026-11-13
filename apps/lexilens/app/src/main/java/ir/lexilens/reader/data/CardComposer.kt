@@ -24,8 +24,11 @@ object CardComposer {
         renderer: PageRenderer,
         ttsRate: Float,
     ): Card {
-        val sourceLine = pageText.lines.getOrNull(word.line)?.text?.trim().orEmpty()
+        val rawLine = pageText.lines.getOrNull(word.line)?.text?.trim().orEmpty()
             .ifBlank { word.text }
+        val rawSentence = pageText.sentenceFor(word).trim().ifBlank { rawLine }
+        val sourceLine = TextUtils.excerptAround(rawLine, word.text, 200)
+        val sentence = TextUtils.excerptAround(rawSentence, word.text, 280)
         val crop = runCatching {
             ContextImageFactory.create(context, renderer, pageText, pageIndex, word)
         }.getOrNull()
@@ -43,7 +46,7 @@ object CardComposer {
             ipa = entry?.ipa.orEmpty(),
             pos = entry?.pos.orEmpty(),
             sourceLine = sourceLine,
-            sentence = sourceLine,
+            sentence = sentence,
             page = pageIndex,
             cropPath = crop?.path.orEmpty(),
             rectL = crop?.left ?: 0f,
