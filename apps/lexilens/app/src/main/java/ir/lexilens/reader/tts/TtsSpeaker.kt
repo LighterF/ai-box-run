@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
+import ir.lexilens.reader.util.SpeechChunker
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
@@ -59,7 +60,19 @@ class TtsSpeaker(context: Context) {
         val engine = tts ?: return
         runCatching {
             engine.setSpeechRate(rate)
-            engine.speak(text, TextToSpeech.QUEUE_FLUSH, Bundle(), "lexilens-${System.nanoTime()}")
+            var mode = TextToSpeech.QUEUE_FLUSH
+            SpeechChunker.chunks(text).forEachIndexed { index, chunk ->
+                val id = "lexilens-${System.nanoTime()}-$index"
+                engine.speak(chunk.text, mode, Bundle(), id)
+                mode = TextToSpeech.QUEUE_ADD
+                if (chunk.pauseAfterMs > 0L) {
+                    engine.playSilentUtterance(
+                        chunk.pauseAfterMs,
+                        TextToSpeech.QUEUE_ADD,
+                        "$id-pause",
+                    )
+                }
+            }
         }
     }
 

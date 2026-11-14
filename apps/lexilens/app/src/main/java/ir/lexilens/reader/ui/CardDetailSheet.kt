@@ -63,8 +63,8 @@ class CardDetailSheet private constructor(
     }
 
     private fun contextText(): String =
-        TextUtils.excerptAround(
-            card.sourceLine.ifBlank { card.sentence },
+        TextUtils.sentenceAround(
+            card.sentence.ifBlank { card.sourceLine.ifBlank { card.word } },
             card.word,
             CONTEXT_MAX_CHARS,
         )
@@ -116,7 +116,7 @@ class CardDetailSheet private constructor(
     fun show() = dialog.show()
 
     companion object {
-        private const val CONTEXT_MAX_CHARS = 240
+        private const val CONTEXT_MAX_CHARS = 360
 
         fun show(context: Context, card: Card, onChanged: () -> Unit) {
             CardDetailSheet(context, card, onChanged).show()

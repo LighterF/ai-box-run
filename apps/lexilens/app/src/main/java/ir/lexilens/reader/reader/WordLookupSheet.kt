@@ -47,7 +47,7 @@ class WordLookupSheet(
         dialog.setOnDismissListener { lookupJob?.cancel() }
 
         binding.word.text = wordBox.text
-        binding.sourceLine.text = highlightedLine()
+        binding.sourceLine.text = highlightedSentence()
         binding.translation.isEnabled = false
         binding.addButton.isEnabled = false
 
@@ -102,12 +102,14 @@ class WordLookupSheet(
         }
     }
 
-    private fun highlightedLine(): CharSequence {
-        val line = pageText.lines.getOrNull(wordBox.line)?.text ?: wordBox.text
+    private fun highlightedSentence(): CharSequence {
+        val sentence = pageText.sentenceFor(wordBox).trim().ifBlank {
+            pageText.lines.getOrNull(wordBox.line)?.text ?: wordBox.text
+        }
         val word = wordBox.text
-        val idx = line.indexOf(word, ignoreCase = true)
-        if (idx < 0) return line
-        val span = SpannableString(line)
+        val idx = sentence.indexOf(word, ignoreCase = true)
+        if (idx < 0) return sentence
+        val span = SpannableString(sentence)
         span.setSpan(BackgroundColorSpan(Color.rgb(254, 243, 199)), idx, idx + word.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         span.setSpan(ForegroundColorSpan(Color.rgb(11, 21, 18)), idx, idx + word.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         span.setSpan(StyleSpan(Typeface.BOLD), idx, idx + word.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)

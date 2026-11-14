@@ -4,6 +4,12 @@ import java.text.Normalizer
 import java.util.Locale
 
 object TextUtils {
+    private const val SENTENCE_ENDS = ".!?…۔؟"
+    private const val CLOSING_MARKS = "\"')]}\u201d\u2019\u00bb"
+    private val ABBREVIATIONS = setOf(
+        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc",
+        "eg", "ie", "no", "vol", "fig", "approx", "dept", "est", "al", "ca", "cf",
+    )
     private val punct = " \t\r\n.,;:!?\"'“”‘’()[]{}<>،؛…—–-«»/\\|".toSet()
     private val arabicFix = mapOf(
         'ي' to 'ی', 'ى' to 'ی', 'ك' to 'ک', 'ۀ' to 'ه',
@@ -82,7 +88,7 @@ object TextUtils {
         if (text.isEmpty()) return ""
         if (text.length <= maxChars) return text
         val token = word.trim()
-        val idx = if (token.isEmpty()) -1 else text.indexOf(token, ignoreCase = true)
+        val idx = if (token.isEmpty()) -1 else indexOfToken(text, token)
         if (idx < 0) return cutAtWord(text, 0, maxChars)
 
         val endWord = (idx + token.length).coerceAtMost(text.length)
@@ -111,6 +117,121 @@ object TextUtils {
         val core = text.substring(start, end).trim()
         val prefix = if (start > 0) "… " else ""
         val suffix = if (end < text.length) " …" else ""
+        return prefix + core + suffix
+    }
+
+    /**
+     * Returns the sentence that contains [word], using real punctuation as the
+     * boundary. If the sentence is longer than [maxChars], a window around the
+     * word is returned without ever cutting the word itself. This matters when
+     * the selected word sits at the very end of a PDF line: the sentence keeps
+     * going on the next line, and the review card must show that continuation.
+     */
+    fun sentenceAround(raw: String, word: String, maxChars: Int = 320): String {
+        val text = raw.replace(Regex("\\s+"), " ").trim()
+        if (text.isEmpty()) return ""
+        val token = word.trim()
+        if (token.isEmpty()) return excerptAround(text, word, maxChars)
+        val idx = indexOfToken(text, token)
+        if (idx < 0) return excerptAround(text, word, maxChars)
+        val wordEnd = (idx + token.length).coerceAtMost(text.length)
+        val sentenceStart = findSentenceStart(text, idx)
+        val sentenceEnd = findSentenceEnd(text, wordEnd)
+        if (sentenceEnd <= sentenceStart) return excerptAround(text, word, maxChars)
+        val sentence = text.substring(sentenceStart, sentenceEnd).trim()
+        if (sentence.length <= maxChars) return sentence
+        return windowAround(text, idx, wordEnd, sentenceStart, sentenceEnd, maxChars)
+    }
+
+    private fun indexOfToken(text: String, token: String): Int {
+        var from = 0
+        while (from <= text.length - token.length) {
+            val i = text.indexOf(token, from, ignoreCase = true)
+            if (i < 0) break
+            val before = if (i > 0) text[i - 1] else ' '
+            val after = if (i + token.length < text.length) text[i + token.length] else ' '
+            if (!before.isLetterOrDigit() && !after.isLetterOrDigit()) return i
+            from = i + 1
+        }
+        return text.indexOf(token, ignoreCase = true)
+    }
+
+    private fun findSentenceStart(text: String, before: Int): Int {
+        var i = before - 1
+        while (i >= 0) {
+            if (text[i] in SENTENCE_ENDS && isSentenceBoundary(text, i)) {
+                var j = i + 1
+                while (j < text.length && (text[j].isWhitespace() || text[j] in CLOSING_MARKS)) j++
+                return j.coerceAtMost(before)
+            }
+            i--
+        }
+        return 0
+    }
+
+    private fun findSentenceEnd(text: String, from: Int): Int {
+        var i = from.coerceAtMost(text.length)
+        while (i < text.length) {
+            if (text[i] in SENTENCE_ENDS && isSentenceBoundary(text, i)) {
+                var j = i + 1
+                while (j < text.length && text[j] in SENTENCE_ENDS) j++
+                while (j < text.length && text[j] in CLOSING_MARKS) j++
+                return j
+            }
+            i++
+        }
+        return text.length
+    }
+
+    private fun isSentenceBoundary(text: String, index: Int): Boolean {
+        val c = text[index]
+        if (c == '.') {
+            if (index > 0 && text[index - 1].isDigit() &&
+                index + 1 < text.length && text[index + 1].isDigit()
+            ) return false
+            if (isAbbreviationBefore(text, index)) return false
+        }
+        var j = index + 1
+        while (j < text.length && text[j] in SENTENCE_ENDS) j++
+        if (j < text.length && !text[j].isWhitespace() && text[j] !in CLOSING_MARKS) return false
+        return true
+    }
+
+    private fun isAbbreviationBefore(text: String, dot: Int): Boolean {
+        var start = dot
+        while (start > 0 && text[start - 1].isLetter()) start--
+        val w = text.substring(start, dot)
+        if (w.length <= 1) return w.isNotEmpty()
+        return w.lowercase(Locale.ROOT) in ABBREVIATIONS
+    }
+
+    private fun windowAround(
+        text: String,
+        wordStart: Int,
+        wordEnd: Int,
+        sentenceStart: Int,
+        sentenceEnd: Int,
+        maxChars: Int,
+    ): String {
+        val budget = (maxChars - (wordEnd - wordStart)).coerceAtLeast(32)
+        var start = (wordStart - budget / 2).coerceAtLeast(sentenceStart)
+        var end = (wordEnd + budget / 2).coerceAtMost(sentenceEnd)
+        if (end - start > maxChars) {
+            end = (start + maxChars).coerceAtLeast(wordEnd).coerceAtMost(sentenceEnd)
+        }
+        if (start > sentenceStart) {
+            val space = text.lastIndexOf(' ', start)
+            if (space >= sentenceStart) start = space + 1
+        }
+        if (end < sentenceEnd) {
+            val space = text.lastIndexOf(' ', end)
+            if (space >= wordEnd) end = space
+        }
+        start = start.coerceAtMost(wordStart)
+        end = end.coerceAtLeast(wordEnd)
+        val core = text.substring(start, end).trim()
+        val prefix = if (start > sentenceStart) "… " else ""
+        val suffix = if (end < sentenceEnd) " …" else ""
         return prefix + core + suffix
     }
 

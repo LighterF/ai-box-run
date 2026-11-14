@@ -220,8 +220,8 @@ class ReviewActivity : AppCompatActivity() {
     }
 
     private fun contextText(card: Card): String =
-        TextUtils.excerptAround(
-            card.sourceLine.ifBlank { card.sentence },
+        TextUtils.sentenceAround(
+            card.sentence.ifBlank { card.sourceLine.ifBlank { card.word } },
             card.word,
             CONTEXT_MAX_CHARS,
         )
@@ -234,7 +234,7 @@ class ReviewActivity : AppCompatActivity() {
     private fun dp(v: Float): Float = v * resources.displayMetrics.density
 
     companion object {
-        private const val CONTEXT_MAX_CHARS = 240
+        private const val CONTEXT_MAX_CHARS = 360
         const val EXTRA_DOC_ID = "doc_id"
         const val EXTRA_DOC_TITLE = "doc_title"
     }

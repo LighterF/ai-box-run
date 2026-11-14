@@ -124,7 +124,7 @@ data class PageText(
         if (idx !in lines.indices) return word.text
         var start = idx
         var end = idx
-        val maxLines = 6
+        val maxLines = 8
         while (start > 0 && idx - start < maxLines) {
             val prev = lines[start - 1]
             if (endsSentence(prev.text)) break
@@ -147,9 +147,12 @@ data class PageText(
     }
 
     private fun endsSentence(raw: String): Boolean {
-        val t = raw.trimEnd()
+        var t = raw.trimEnd()
+        while (t.isNotEmpty() && (t.last() in "\"')]}\u201d\u2019\u00bb")) {
+            t = t.dropLast(1).trimEnd()
+        }
         if (t.isEmpty()) return false
-        return t.last() in ".!?۔"
+        return t.last() in ".!?…۔؟"
     }
 
     companion object {

@@ -59,4 +59,43 @@ class TextUtilsTest {
         assertTrue(out.contains("second sentence"))
         assertTrue(!out.contains("Third sentence"))
     }
+
+    @Test
+    fun sentenceAroundUsesPunctuationAndKeepsWordAtLineEnd() {
+        val text = "He opened the old door. The target word was waiting at the end. " +
+            "Nobody expected it."
+        val out = TextUtils.sentenceAround(text, "target", 200)
+        assertEquals("The target word was waiting at the end.", out)
+    }
+
+    @Test
+    fun sentenceAroundContinuesWhenWordIsLastWordOfLine() {
+        val text = "The boy looked at the target. Then he ran home."
+        val out = TextUtils.sentenceAround(text, "target", 200)
+        assertEquals("The boy looked at the target.", out)
+    }
+
+    @Test
+    fun sentenceAroundDoesNotBreakOnAbbreviationsOrDecimals() {
+        val text = "Mr. Smith paid 3.50 dollars for the target book. Then he left."
+        val out = TextUtils.sentenceAround(text, "target", 200)
+        assertEquals("Mr. Smith paid 3.50 dollars for the target book.", out)
+    }
+
+    @Test
+    fun sentenceAroundCapsLongSentenceWithoutCuttingWord() {
+        val text = "First sentence. " + (1..80).joinToString(" ") { "word$it" } +
+            " target " + (81..160).joinToString(" ") { "word$it" } + ". Last sentence."
+        val out = TextUtils.sentenceAround(text, "target", 120)
+        assertTrue(out.contains("target"))
+        assertTrue("excerpt too long: ${out.length}", out.length <= 150)
+        assertTrue(out.startsWith("…") || out.startsWith("word"))
+    }
+
+    @Test
+    fun sentenceAroundKeepsQuotesAndEllipsisEnding() {
+        val text = "She whispered, \"Do not touch the target.\" Then she left."
+        val out = TextUtils.sentenceAround(text, "target", 200)
+        assertEquals("She whispered, \"Do not touch the target.\"", out)
+    }
 }

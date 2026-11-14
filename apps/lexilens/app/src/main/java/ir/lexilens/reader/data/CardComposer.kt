@@ -28,7 +28,7 @@ object CardComposer {
             .ifBlank { word.text }
         val rawSentence = pageText.sentenceFor(word).trim().ifBlank { rawLine }
         val sourceLine = TextUtils.excerptAround(rawLine, word.text, 200)
-        val sentence = TextUtils.excerptAround(rawSentence, word.text, 280)
+        val sentence = TextUtils.sentenceAround(rawSentence, word.text, 1600)
         val crop = runCatching {
             ContextImageFactory.create(context, renderer, pageText, pageIndex, word)
         }.getOrNull()
