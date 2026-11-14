@@ -121,6 +121,19 @@ object TextUtils {
     }
 
     /**
+     * Cards created before 1.1.1 stored at most a 280-character excerpt. An
+     * excerpt that touches an ellipsis marker was clipped and should be rebuilt
+     * from the source PDF. Long strings are current, sentence-sized contexts and
+     * must not be rebuilt on every display.
+     */
+    fun needsContextRefresh(stored: String, legacyLimit: Int = 300): Boolean {
+        val s = stored.trim()
+        if (s.isEmpty()) return true
+        if (s.length > legacyLimit) return false
+        return s.startsWith("…") || s.endsWith("…")
+    }
+
+    /**
      * Returns the sentence that contains [word], using real punctuation as the
      * boundary. If the sentence is longer than [maxChars], a window around the
      * word is returned without ever cutting the word itself. This matters when

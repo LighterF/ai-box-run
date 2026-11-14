@@ -6,12 +6,16 @@ import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import ir.lexilens.reader.data.AppDb
 import ir.lexilens.reader.data.Prefs
 import ir.lexilens.reader.tts.TtsSpeaker
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 class App : Application() {
     lateinit var db: AppDb
         private set
     lateinit var tts: TtsSpeaker
         private set
+    val bg = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()

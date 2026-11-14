@@ -8,14 +8,18 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import ir.lexilens.reader.App
 import ir.lexilens.reader.data.Card
+import ir.lexilens.reader.data.CardContextBackfill
 import ir.lexilens.reader.databinding.SheetCardDetailBinding
 import ir.lexilens.reader.tts.AudioPlayer
 import ir.lexilens.reader.util.TextUtils
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class CardDetailSheet private constructor(
     private val context: Context,
-    private val card: Card,
+    private var card: Card,
     private val onChanged: () -> Unit,
 ) {
     private val app = context.applicationContext as App
@@ -60,6 +64,23 @@ class CardDetailSheet private constructor(
         binding.saveButton.setOnClickListener { save() }
         binding.suspendButton.setOnClickListener { toggleSuspend() }
         binding.deleteButton.setOnClickListener { confirmDelete() }
+        refreshContext()
+    }
+
+    private fun refreshContext() {
+        if (!CardContextBackfill.needsRefresh(card)) return
+        app.bg.launch {
+            val updated = CardContextBackfill.refresh(context, app, card) ?: return@launch
+            withContext(Dispatchers.Main) {
+                if (!dialog.isShowing) return@withContext
+                card = updated
+                val text = contextText()
+                binding.sourceLine.text = text
+                if (updated.cropPath.isBlank() || !File(updated.cropPath).exists()) {
+                    binding.contextView.setText(text, updated.word)
+                }
+            }
+        }
     }
 
     private fun contextText(): String =

@@ -229,6 +229,14 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "lexilens.db", null, 1
         writableDatabase.update("cards", values, "id = ?", arrayOf(card.id.toString()))
     }
 
+    fun updateCardContext(id: Long, sentence: String, sourceLine: String) {
+        val values = ContentValues().apply {
+            put("sentence", sentence)
+            put("source_line", sourceLine)
+        }
+        writableDatabase.update("cards", values, "id = ?", arrayOf(id.toString()))
+    }
+
     fun deleteCard(id: Long) {
         writableDatabase.delete("cards", "id = ?", arrayOf(id.toString()))
     }

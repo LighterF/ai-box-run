@@ -98,4 +98,17 @@ class TextUtilsTest {
         val out = TextUtils.sentenceAround(text, "target", 200)
         assertEquals("She whispered, \"Do not touch the target.\"", out)
     }
+
+    @Test
+    fun legacyBlankOrClippedContextNeedsRefresh() {
+        assertTrue(TextUtils.needsContextRefresh(""))
+        assertTrue(TextUtils.needsContextRefresh("… the target word was here …"))
+        assertTrue(TextUtils.needsContextRefresh("The target word was here …"))
+    }
+
+    @Test
+    fun currentFullContextDoesNotNeedRefresh() {
+        assertTrue(!TextUtils.needsContextRefresh("The target word was here."))
+        assertTrue(!TextUtils.needsContextRefresh("… " + "x".repeat(400) + " …"))
+    }
 }

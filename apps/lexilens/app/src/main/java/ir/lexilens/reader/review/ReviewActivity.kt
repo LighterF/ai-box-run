@@ -10,6 +10,7 @@ import com.google.android.material.snackbar.Snackbar
 import ir.lexilens.reader.App
 import ir.lexilens.reader.R
 import ir.lexilens.reader.data.Card
+import ir.lexilens.reader.data.CardContextBackfill
 import ir.lexilens.reader.data.Prefs
 import ir.lexilens.reader.data.Rating
 import ir.lexilens.reader.data.Srs
@@ -17,6 +18,7 @@ import ir.lexilens.reader.databinding.ActivityReviewBinding
 import ir.lexilens.reader.tts.AudioPlayer
 import ir.lexilens.reader.util.TextUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -38,6 +40,7 @@ class ReviewActivity : AppCompatActivity() {
     private var lastBefore: Card? = null
     private var lastLogId = -1L
     private var lastIndex = -1
+    private var contextJob: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -129,7 +132,27 @@ class ReviewActivity : AppCompatActivity() {
         binding.lblHard.text = Srs.preview(card, Rating.HARD)
         binding.lblGood.text = Srs.preview(card, Rating.GOOD)
         binding.lblEasy.text = Srs.preview(card, Rating.EASY)
+        refreshLegacyContext(card)
         if (prefs.autoPlay) playWord()
+    }
+
+    private fun refreshLegacyContext(card: Card) {
+        if (!CardContextBackfill.needsRefresh(card)) return
+        contextJob?.cancel()
+        contextJob = lifecycleScope.launch {
+            val updated = withContext(Dispatchers.IO) {
+                CardContextBackfill.refresh(this@ReviewActivity, app, card)
+            } ?: return@launch
+            if (current?.id != updated.id) return@launch
+            current = updated
+            val position = queue.indexOfFirst { it.id == updated.id }
+            if (position >= 0) queue[position] = updated
+            val text = contextText(updated)
+            binding.sourceLine.text = text
+            if (updated.cropPath.isBlank() || !File(updated.cropPath).exists()) {
+                binding.contextView.setText(text, updated.word)
+            }
+        }
     }
 
     private fun reveal() {
