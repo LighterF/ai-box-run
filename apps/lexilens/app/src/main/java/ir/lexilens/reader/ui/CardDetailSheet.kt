@@ -8,6 +8,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import ir.lexilens.reader.App
 import ir.lexilens.reader.data.Card
+import ir.lexilens.reader.data.CardComposer
 import ir.lexilens.reader.data.CardContextBackfill
 import ir.lexilens.reader.databinding.SheetCardDetailBinding
 import ir.lexilens.reader.tts.AudioPlayer
@@ -51,7 +52,7 @@ class CardDetailSheet private constructor(
         }
         binding.suspendButton.text = if (suspended) "رفع تعلیق" else "تعلیق"
 
-        if (card.cropPath.isNotBlank() && File(card.cropPath).exists()) {
+        if (showCrop(card)) {
             binding.contextView.setCrop(card.cropPath, card.rectL, card.rectT, card.rectR, card.rectB, card.word)
         } else {
             binding.contextView.setText(contextText(), card.word)
@@ -76,7 +77,9 @@ class CardDetailSheet private constructor(
                 card = updated
                 val text = contextText()
                 binding.sourceLine.text = text
-                if (updated.cropPath.isBlank() || !File(updated.cropPath).exists()) {
+                if (showCrop(updated)) {
+                    binding.contextView.setCrop(updated.cropPath, updated.rectL, updated.rectT, updated.rectR, updated.rectB, updated.word)
+                } else {
                     binding.contextView.setText(text, updated.word)
                 }
             }
@@ -84,11 +87,14 @@ class CardDetailSheet private constructor(
     }
 
     private fun contextText(): String =
-        TextUtils.sentenceAround(
-            card.sentence.ifBlank { card.sourceLine.ifBlank { card.word } },
-            card.word,
-            CONTEXT_MAX_CHARS,
-        )
+        card.sentence.trim().ifBlank {
+            card.sourceLine.trim().ifBlank { card.word }
+        }
+
+    private fun showCrop(card: Card): Boolean =
+        card.contextRev >= CardComposer.CONTEXT_REV &&
+            card.cropPath.isNotBlank() &&
+            File(card.cropPath).exists()
 
     private fun playWord() {
         val f = if (card.audioPath.isNotBlank()) File(card.audioPath) else null
@@ -137,8 +143,6 @@ class CardDetailSheet private constructor(
     fun show() = dialog.show()
 
     companion object {
-        private const val CONTEXT_MAX_CHARS = 360
-
         fun show(context: Context, card: Card, onChanged: () -> Unit) {
             CardDetailSheet(context, card, onChanged).show()
         }

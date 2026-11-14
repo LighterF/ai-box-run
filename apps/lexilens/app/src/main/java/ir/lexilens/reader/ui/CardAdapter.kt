@@ -18,7 +18,11 @@ class CardAdapter(
             binding.cardWord.text = card.word
             binding.cardTranslation.text = TextUtils.translationLines(card.translation)
                 .take(2).joinToString(" · ").ifBlank { "بدون معنی — برای ویرایش ضربه بزن" }
-            binding.cardSource.text = card.sourceLine.ifBlank { card.docTitle }
+            binding.cardSource.text = TextUtils.excerptAround(
+                card.sentence.ifBlank { card.sourceLine },
+                card.word,
+                180,
+            ).ifBlank { card.docTitle }
             binding.cardDue.text = TextUtils.dueLabel(card)
             binding.root.setOnClickListener { onClick(card) }
         }

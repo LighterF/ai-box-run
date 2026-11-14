@@ -56,7 +56,7 @@ class PdfTextExtractor(
         if (!f.exists()) return null
         return runCatching {
             val json = JSONObject(f.readText())
-            if (json.optInt("v", 0) < 2) return null
+            if (json.optInt("v", 0) < 4) return null
             PageText.fromJson(json)
         }.getOrNull()
     }
@@ -173,11 +173,13 @@ class PdfTextExtractor(
                     val segment = raw.subList(segmentStart, i)
                     segmentStart = i
                     val lineStartWord = words.size
+                    val rawGroups = mutableListOf<String>()
                     var current = mutableListOf<CharBox>()
                     var prev: CharBox? = null
                     fun flush() {
                         if (current.isEmpty()) return
                         val text = buildString { current.forEach { append(it.text) } }
+                        rawGroups.add(text)
                         val cleaned = text.trim { ch ->
                             ch.isWhitespace() || ch in ".,;:!?\"'“”‘’()[]{}<>،؛…—–-«»"
                         }
@@ -218,7 +220,9 @@ class PdfTextExtractor(
                         val y1 = slice.maxOf { it.y + it.h }
                         lineBoxes.add(
                             LineBox(
-                                text = slice.joinToString(" ") { it.text },
+                                // Rebuild the line from raw glyphs so commas, periods
+                                // and question marks survive for punctuation-aware TTS.
+                                text = joinRawGroups(rawGroups),
                                 x = x0,
                                 y = y0,
                                 w = (x1 - x0).coerceAtLeast(1f),
@@ -240,6 +244,22 @@ class PdfTextExtractor(
                 orderedLines.add(l)
             }
             return PageText(pageW, pageH, ordered, orderedLines, rotation)
+        }
+
+        private fun joinRawGroups(groups: List<String>): String {
+            val sb = StringBuilder()
+            for (raw in groups) {
+                if (raw.isEmpty()) continue
+                if (sb.isNotEmpty()) {
+                    val last = sb.last()
+                    val first = raw.first()
+                    val punctuation = ".,;:!?\"'“”‘’()[]{}<>،؛…—–-«»"
+                    val opening = "([{“‘«"
+                    if (first !in punctuation && last !in opening) sb.append(' ')
+                }
+                sb.append(raw)
+            }
+            return sb.toString().replace(Regex("\\s+"), " ").trim()
         }
     }
 

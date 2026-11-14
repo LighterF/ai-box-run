@@ -10,6 +10,7 @@ import com.google.android.material.snackbar.Snackbar
 import ir.lexilens.reader.App
 import ir.lexilens.reader.R
 import ir.lexilens.reader.data.Card
+import ir.lexilens.reader.data.CardComposer
 import ir.lexilens.reader.data.CardContextBackfill
 import ir.lexilens.reader.data.Prefs
 import ir.lexilens.reader.data.Rating
@@ -120,7 +121,7 @@ class ReviewActivity : AppCompatActivity() {
         binding.pageBadge.text = "صفحهٔ ${TextUtils.faNumber(card.page + 1)}"
         val contextText = contextText(card)
         binding.sourceLine.text = contextText
-        if (card.cropPath.isNotBlank() && File(card.cropPath).exists()) {
+        if (showCrop(card)) {
             binding.contextView.setCrop(card.cropPath, card.rectL, card.rectT, card.rectR, card.rectB, card.word)
         } else {
             binding.contextView.setText(contextText, card.word)
@@ -149,7 +150,9 @@ class ReviewActivity : AppCompatActivity() {
             if (position >= 0) queue[position] = updated
             val text = contextText(updated)
             binding.sourceLine.text = text
-            if (updated.cropPath.isBlank() || !File(updated.cropPath).exists()) {
+            if (showCrop(updated)) {
+                binding.contextView.setCrop(updated.cropPath, updated.rectL, updated.rectT, updated.rectR, updated.rectB, updated.word)
+            } else {
                 binding.contextView.setText(text, updated.word)
             }
         }
@@ -243,11 +246,14 @@ class ReviewActivity : AppCompatActivity() {
     }
 
     private fun contextText(card: Card): String =
-        TextUtils.sentenceAround(
-            card.sentence.ifBlank { card.sourceLine.ifBlank { card.word } },
-            card.word,
-            CONTEXT_MAX_CHARS,
-        )
+        card.sentence.trim().ifBlank {
+            card.sourceLine.trim().ifBlank { card.word }
+        }
+
+    private fun showCrop(card: Card): Boolean =
+        card.contextRev >= CardComposer.CONTEXT_REV &&
+            card.cropPath.isNotBlank() &&
+            File(card.cropPath).exists()
 
     override fun onDestroy() {
         super.onDestroy()
@@ -257,7 +263,6 @@ class ReviewActivity : AppCompatActivity() {
     private fun dp(v: Float): Float = v * resources.displayMetrics.density
 
     companion object {
-        private const val CONTEXT_MAX_CHARS = 360
         const val EXTRA_DOC_ID = "doc_id"
         const val EXTRA_DOC_TITLE = "doc_title"
     }

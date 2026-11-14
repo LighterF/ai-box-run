@@ -4,6 +4,7 @@ import java.text.Normalizer
 import java.util.Locale
 
 object TextUtils {
+    const val CONTEXT_MAX_CHARS = 700
     private const val SENTENCE_ENDS = ".!?…۔؟"
     private const val CLOSING_MARKS = "\"')]}\u201d\u2019\u00bb"
     private val ABBREVIATIONS = setOf(

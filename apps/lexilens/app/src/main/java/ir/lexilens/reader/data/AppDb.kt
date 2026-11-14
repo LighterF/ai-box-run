@@ -8,7 +8,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import java.util.Calendar
 import java.util.Locale
 
-class AppDb(context: Context) : SQLiteOpenHelper(context, "lexilens.db", null, 1) {
+class AppDb(context: Context) : SQLiteOpenHelper(context, "lexilens.db", null, 2) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -37,6 +37,7 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "lexilens.db", null, 1
                 "    pos TEXT NOT NULL DEFAULT '',\n" +
                 "    source_line TEXT NOT NULL DEFAULT '',\n" +
                 "    sentence TEXT NOT NULL DEFAULT '',\n" +
+                "    context_rev INTEGER NOT NULL DEFAULT 0,\n" +
                 "    page INTEGER NOT NULL DEFAULT 0,\n" +
                 "    crop_path TEXT NOT NULL DEFAULT '',\n" +
                 "    rect_l REAL NOT NULL DEFAULT 0,\n" +
@@ -77,6 +78,9 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "lexilens.db", null, 1
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE cards ADD COLUMN context_rev INTEGER NOT NULL DEFAULT 0")
+        }
     }
 
     fun addDocument(title: String, path: String, pageCount: Int): Long {
@@ -229,10 +233,26 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "lexilens.db", null, 1
         writableDatabase.update("cards", values, "id = ?", arrayOf(card.id.toString()))
     }
 
-    fun updateCardContext(id: Long, sentence: String, sourceLine: String) {
+    fun updateCardContext(
+        id: Long,
+        sentence: String,
+        sourceLine: String,
+        contextRev: Int,
+        cropPath: String,
+        rectL: Float,
+        rectT: Float,
+        rectR: Float,
+        rectB: Float,
+    ) {
         val values = ContentValues().apply {
             put("sentence", sentence)
             put("source_line", sourceLine)
+            put("context_rev", contextRev)
+            put("crop_path", cropPath)
+            put("rect_l", rectL)
+            put("rect_t", rectT)
+            put("rect_r", rectR)
+            put("rect_b", rectB)
         }
         writableDatabase.update("cards", values, "id = ?", arrayOf(id.toString()))
     }
@@ -389,6 +409,7 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "lexilens.db", null, 1
         pos = cursor.getString(cursor.getColumnIndexOrThrow("pos")),
         sourceLine = cursor.getString(cursor.getColumnIndexOrThrow("source_line")),
         sentence = cursor.getString(cursor.getColumnIndexOrThrow("sentence")),
+        contextRev = cursor.getInt(cursor.getColumnIndexOrThrow("context_rev")),
         page = cursor.getInt(cursor.getColumnIndexOrThrow("page")),
         cropPath = cursor.getString(cursor.getColumnIndexOrThrow("crop_path")),
         rectL = cursor.getFloat(cursor.getColumnIndexOrThrow("rect_l")),
@@ -419,6 +440,7 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "lexilens.db", null, 1
         put("pos", card.pos)
         put("source_line", card.sourceLine)
         put("sentence", card.sentence)
+        put("context_rev", card.contextRev)
         put("page", card.page)
         put("crop_path", card.cropPath)
         put("rect_l", card.rectL)

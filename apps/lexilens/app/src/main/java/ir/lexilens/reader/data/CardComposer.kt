@@ -12,6 +12,8 @@ import java.util.UUID
 
 object CardComposer {
 
+    const val CONTEXT_REV = 3
+
     fun build(
         context: Context,
         app: App,
@@ -28,9 +30,9 @@ object CardComposer {
             .ifBlank { word.text }
         val rawSentence = pageText.sentenceFor(word).trim().ifBlank { rawLine }
         val sourceLine = TextUtils.excerptAround(rawLine, word.text, 200)
-        val sentence = TextUtils.sentenceAround(rawSentence, word.text, 1600)
+        val sentence = TextUtils.sentenceAround(rawSentence, word.text, TextUtils.CONTEXT_MAX_CHARS)
         val crop = runCatching {
-            ContextImageFactory.create(context, renderer, pageText, pageIndex, word)
+            ContextImageFactory.create(context, renderer, pageText, pageIndex, word, sentence)
         }.getOrNull()
         val translation = translationOverride.trim().ifBlank {
             entry?.translations?.joinToString("\n").orEmpty()
@@ -47,6 +49,7 @@ object CardComposer {
             pos = entry?.pos.orEmpty(),
             sourceLine = sourceLine,
             sentence = sentence,
+            contextRev = CONTEXT_REV,
             page = pageIndex,
             cropPath = crop?.path.orEmpty(),
             rectL = crop?.left ?: 0f,

@@ -36,10 +36,75 @@ class PageTextTest {
     }
 
     @Test
+    fun sentenceStartsBeforeTheLineThatContainsTheWord() {
+        val page = buildPage(
+            "At school, Harry had no one. Everybody knew that Dudley's gang hated that",
+            "odd Harry Potter in his baggy old clothes.",
+        )
+        val odd = page.words.first { it.text == "odd" }
+        val span = page.sentenceSpanFor(odd)
+        assertEquals(
+            "Everybody knew that Dudley's gang hated that odd Harry Potter in his baggy old clothes.",
+            span?.text,
+        )
+        assertEquals(0, span?.startLine)
+        assertEquals("Everybody", page.words[span!!.slices.first().firstWord].text)
+    }
+
+    @Test
+    fun sentenceDoesNotIncludeNeighbouringSentencesOnTheSameLine() {
+        val page = buildPage("First sentence. The target word ends here. Next sentence.")
+        val target = page.words.first { it.text == "target" }
+        val span = page.sentenceSpanFor(target)
+        assertEquals("The target word ends here.", span?.text)
+        assertEquals("The", page.words[span!!.slices.first().firstWord].text)
+        assertEquals("here.", page.words[span.slices.last().lastWord].text)
+    }
+
+    @Test
+    fun sentenceContinuesAcrossLineWhenPunctuationIsMissing() {
+        val page = buildPage(
+            "He opened the old door",
+            "and walked in without a word.",
+        )
+        val door = page.words.first { it.text == "door" }
+        val span = page.sentenceSpanFor(door)
+        assertEquals("He opened the old door and walked in without a word.", span?.text)
+        assertEquals(0, span?.startLine)
+        assertEquals(1, span?.endLine)
+    }
+
+    @Test
     fun mapsNormalizedPointsForRotation() {
         val text = PageText(200f, 100f, emptyList(), emptyList(), rotation = 90)
         val (x, y) = text.mapFromPage(0.25f, 0.5f)
         assertEquals(100f, x, 0.01f)
         assertEquals(75f, y, 0.01f)
     }
+}
+
+private fun buildPage(vararg texts: String): PageText {
+    val words = mutableListOf<WordBox>()
+    val lines = mutableListOf<LineBox>()
+    texts.forEachIndexed { lineIndex, text ->
+        val start = words.size
+        var x = 10f
+        text.split(' ').forEach { token ->
+            val w = (token.length * 6f + 4f).coerceAtLeast(7f)
+            words.add(WordBox(token, x, 10f + lineIndex * 20f, w, 12f, lineIndex))
+            x += w + 4f
+        }
+        lines.add(
+            LineBox(
+                text = text,
+                x = 10f,
+                y = 10f + lineIndex * 20f,
+                w = x - 10f,
+                h = 12f,
+                wordStart = start,
+                wordEnd = words.size - 1,
+            )
+        )
+    }
+    return PageText(600f, 80f, words, lines)
 }

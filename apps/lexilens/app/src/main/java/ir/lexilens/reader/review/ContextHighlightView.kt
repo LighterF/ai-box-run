@@ -83,7 +83,7 @@ class ContextHighlightView @JvmOverloads constructor(
         val w = if (width > 0) width else resources.displayMetrics.widthPixels
         val bmp = bitmap
         val h = when {
-            bmp != null -> (w.toFloat() * bmp.height / bmp.width).toInt().coerceIn(dp(48f).toInt(), dp(280f).toInt())
+            bmp != null -> (w.toFloat() * bmp.height / bmp.width).toInt().coerceIn(dp(48f).toInt(), dp(420f).toInt())
             else -> {
                 val layout = buildTextLayout((w - dp(22f)).toInt())
                 textLayout = layout
@@ -117,10 +117,12 @@ class ContextHighlightView @JvmOverloads constructor(
         canvas.save()
         canvas.clipPath(clipPath)
         canvas.drawColor(Color.rgb(247, 245, 238))
-        val scale = width.toFloat() / bmp.width
+        val scale = minOf(width.toFloat() / bmp.width, height.toFloat() / bmp.height)
+        val drawW = bmp.width * scale
         val drawH = bmp.height * scale
+        val left = (width - drawW) / 2f
         val top = (height - drawH) / 2f
-        val img = RectF(0f, top, width.toFloat(), top + drawH)
+        val img = RectF(left, top, left + drawW, top + drawH)
         canvas.drawBitmap(bmp, null, img, paint)
 
         val hr = RectF(

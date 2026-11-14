@@ -16,6 +16,7 @@ data class Card(
     val pos: String = "",
     val sourceLine: String = "",
     val sentence: String = "",
+    val contextRev: Int = 0,
     val page: Int = 0,
     val cropPath: String = "",
     val rectL: Float = 0f,
