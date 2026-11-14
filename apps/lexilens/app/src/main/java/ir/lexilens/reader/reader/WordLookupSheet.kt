@@ -14,6 +14,8 @@ import android.widget.Toast
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import ir.lexilens.reader.App
+import ir.lexilens.reader.data.Card
+import ir.lexilens.reader.data.CardLookup
 import ir.lexilens.reader.data.DictionaryEntry
 import ir.lexilens.reader.data.DictionaryRepository
 import ir.lexilens.reader.databinding.SheetWordBinding
@@ -32,11 +34,14 @@ class WordLookupSheet(
     private val scope: CoroutineScope,
     private val pageText: PageText,
     private val wordBox: WordBox,
-    private val onAdd: (String, DictionaryEntry?) -> Unit,
+    private val docId: Long,
+    private val pageIndex: Int,
+    private val onAdd: (String, DictionaryEntry?, Card?) -> Unit,
 ) {
     private val dialog = BottomSheetDialog(context)
     private val binding = SheetWordBinding.inflate(LayoutInflater.from(context))
     private var entry: DictionaryEntry? = null
+    private var existingCard: Card? = null
     private var lookupJob: Job? = null
 
     init {
@@ -61,6 +66,16 @@ class WordLookupSheet(
 
     private fun lookup() {
         lookupJob = scope.launch {
+            val normalized = TextUtils.cleanToken(wordBox.text).ifBlank {
+                TextUtils.normalizeWord(wordBox.text)
+            }
+            val savedCards = withContext(Dispatchers.IO) {
+                runCatching { app.db.cardsForWord(docId, normalized) }.getOrDefault(emptyList())
+            }
+            val resolved = CardLookup.resolve(savedCards, pageIndex)
+            existingCard = resolved.samePage
+            val saved = resolved.savedMeaning
+
             val found = withContext(Dispatchers.IO) {
                 runCatching {
                     DictionaryRepository.get(context).ensureReady()
@@ -71,35 +86,57 @@ class WordLookupSheet(
             binding.loadingRow.visibility = android.view.View.GONE
             binding.translation.isEnabled = true
             binding.addButton.isEnabled = true
-            if (found == null) {
-                binding.translation.hint = "معنی پیدا نشد؛ می‌توانی خودت بنویسی."
-                binding.dictSource.text = "در واژه‌نامه پیدا نشد."
-                binding.dictSource.visibility = android.view.View.VISIBLE
-                return@launch
+            bindMeaning(found, saved)
+            if (existingCard != null) {
+                binding.addButton.text = "ذخیرهٔ تغییرات کارت"
             }
+        }
+    }
+
+    private fun bindMeaning(found: DictionaryEntry?, saved: Card?) {
+        if (saved != null) {
+            binding.translation.setText(saved.translation)
+            binding.addHint.text =
+                "معنی ذخیره‌شدهٔ خودت نمایش داده می‌شود؛ اگر تغییرش بدهی، همان کارت به‌روز می‌شود."
+        } else if (found == null) {
+            binding.translation.hint = "معنی پیدا نشد؛ می‌توانی خودت بنویسی."
+        } else {
             val translation = found.translations.take(6).joinToString("\n")
-            binding.translation.setText(translation)
             if (translation.isBlank()) {
                 binding.translation.hint = "واژه‌نامه معنی فارسی نداشت؛ خودت بنویس."
+            } else {
+                binding.translation.setText(translation)
             }
-            val meta = listOf(found.ipa, found.pos).filter { it.isNotBlank() }.joinToString("  ·  ")
-            binding.wordMeta.text = meta
-            binding.wordMeta.visibility = if (meta.isBlank()) android.view.View.GONE else android.view.View.VISIBLE
-            binding.gloss.text = found.glosses.take(2).joinToString(" · ")
-            binding.gloss.visibility = if (found.glosses.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
-            val src = when {
-                found.source.contains("wiktionary") -> "ویکی‌واژه"
-                found.source == "vahidn" -> "واژه‌نامهٔ VahidN"
-                found.source == "shirin" -> "مجموعهٔ Shirin"
-                found.source.contains("koreader") -> "واژه‌نامهٔ KOReader"
-                else -> found.source
-            }
-            binding.dictSource.text = buildString {
-                append("منبع: ").append(src)
-                found.matchedForm?.let { append("  ·  ").append(it).append(" ← ").append(found.word) }
+        }
+
+        if (found == null) {
+            binding.dictSource.text = if (saved != null) {
+                "معنی ذخیره‌شدهٔ تو"
+            } else {
+                "در واژه‌نامه پیدا نشد."
             }
             binding.dictSource.visibility = android.view.View.VISIBLE
+            return
         }
+
+        val meta = listOf(found.ipa, found.pos).filter { it.isNotBlank() }.joinToString("  ·  ")
+        binding.wordMeta.text = meta
+        binding.wordMeta.visibility = if (meta.isBlank()) android.view.View.GONE else android.view.View.VISIBLE
+        binding.gloss.text = found.glosses.take(2).joinToString(" · ")
+        binding.gloss.visibility = if (found.glosses.isEmpty()) android.view.View.GONE else android.view.View.VISIBLE
+        val src = when {
+            found.source.contains("wiktionary") -> "ویکی‌واژه"
+            found.source == "vahidn" -> "واژه‌نامهٔ VahidN"
+            found.source == "shirin" -> "مجموعهٔ Shirin"
+            found.source.contains("koreader") -> "واژه‌نامهٔ KOReader"
+            else -> found.source
+        }
+        binding.dictSource.text = buildString {
+            if (saved != null) append("معنی ذخیره‌شدهٔ تو  ·  ")
+            append("منبع: ").append(src)
+            found.matchedForm?.let { append("  ·  ").append(it).append(" ← ").append(found.word) }
+        }
+        binding.dictSource.visibility = android.view.View.VISIBLE
     }
 
     private fun highlightedSentence(): CharSequence {
@@ -122,7 +159,7 @@ class WordLookupSheet(
         if (text.isBlank()) {
             Toast.makeText(context, "می‌توانی بعداً از بخش کارت‌ها معنی را اضافه کنی.", Toast.LENGTH_SHORT).show()
         }
-        onAdd(text, entry)
+        onAdd(text, entry, existingCard)
     }
 
     fun dismiss() {

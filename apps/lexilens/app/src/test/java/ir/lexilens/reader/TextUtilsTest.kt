@@ -36,6 +36,18 @@ class TextUtilsTest {
     }
 
     @Test
+    fun parsesPersianArabicAndLatinDigits() {
+        assertEquals(250, TextUtils.parseNumber("۲۵۰"))
+        assertEquals(250, TextUtils.parseNumber("٢٥٠"))
+        assertEquals(250, TextUtils.parseNumber("250"))
+        assertEquals(1200, TextUtils.parseNumber("۱٬۲۰۰"))
+        assertEquals(0, TextUtils.parseNumber("۰"))
+        assertEquals(null, TextUtils.parseNumber(""))
+        assertEquals(null, TextUtils.parseNumber("دو"))
+        assertEquals(null, TextUtils.parseNumber("12a"))
+    }
+
+    @Test
     fun shortExcerptIsUnchanged() {
         val line = "The quick brown fox jumps over the lazy dog."
         assertEquals(line, TextUtils.excerptAround(line, "quick", 120))

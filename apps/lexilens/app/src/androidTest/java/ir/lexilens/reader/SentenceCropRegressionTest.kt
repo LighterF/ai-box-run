@@ -5,6 +5,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import ir.lexilens.reader.data.Card
 import ir.lexilens.reader.data.CardContextBackfill
+import ir.lexilens.reader.data.CardLookup
 import ir.lexilens.reader.pdf.ContextImageFactory
 import ir.lexilens.reader.pdf.PageRenderer
 import ir.lexilens.reader.pdf.PdfTextExtractor
@@ -84,6 +85,42 @@ class SentenceCropRegressionTest {
             assertTrue(stored.rectR > stored.rectL)
             assertTrue(stored.rectB > stored.rectT)
             runCatching { File(stored.cropPath).delete() }
+        } finally {
+            app.db.deleteCard(cardId)
+            app.db.deleteDocument(docId)
+        }
+    }
+
+    @Test
+    fun lookupFindsTheUsersEditedMeaningForTheSamePage() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val app = context.applicationContext as App
+        val pdf = copyPdf()
+        val docId = app.db.addDocument("regression-custom-meaning", pdf.absolutePath, 1)
+        val cardId = try {
+            app.db.insertCard(
+                Card(
+                    docId = docId,
+                    word = "odd",
+                    normWord = "odd",
+                    translation = "معنی دست‌نویس من",
+                    page = 0,
+                    createdAt = System.currentTimeMillis(),
+                    dueAt = System.currentTimeMillis(),
+                )
+            )
+        } catch (t: Throwable) {
+            app.db.deleteDocument(docId)
+            throw t
+        }
+        try {
+            val saved = app.db.cardsForWord(docId, "odd")
+            assertEquals(1, saved.size)
+            assertEquals("معنی دست‌نویس من", saved.first().translation)
+
+            val resolved = CardLookup.resolve(saved, page = 0)
+            assertEquals(cardId, resolved.samePage?.id)
+            assertEquals("معنی دست‌نویس من", resolved.savedMeaning?.translation)
         } finally {
             app.db.deleteCard(cardId)
             app.db.deleteDocument(docId)

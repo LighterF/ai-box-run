@@ -13,6 +13,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import ir.lexilens.reader.App
 import ir.lexilens.reader.R
+import ir.lexilens.reader.data.Card
 import ir.lexilens.reader.data.CardComposer
 import ir.lexilens.reader.data.DictionaryEntry
 import ir.lexilens.reader.data.Document
@@ -285,7 +286,11 @@ class ReaderActivity : AppCompatActivity() {
             scope = lifecycleScope,
             pageText = text,
             wordBox = hit.first,
-            onAdd = { translation, entry -> addCard(hit.first, text, translation, entry) },
+            docId = doc?.id ?: 0L,
+            pageIndex = currentWordPage,
+            onAdd = { translation, entry, existing ->
+                addCard(hit.first, text, translation, entry, existing)
+            },
         )
         activeSheet = sheet
         sheet.show()
@@ -296,11 +301,27 @@ class ReaderActivity : AppCompatActivity() {
         text: PageText,
         translation: String,
         entry: DictionaryEntry?,
+        existing: Card?,
     ) {
+        val sheet = activeSheet
+        if (existing != null) {
+            val updated = existing.copy(translation = translation.trim())
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) {
+                    runCatching { app.db.updateCard(updated) }
+                }
+                sheet?.dismiss()
+                Snackbar.make(
+                    binding.root,
+                    "معنی «${word.text}» به‌روز شد",
+                    Snackbar.LENGTH_LONG,
+                ).show()
+            }
+            return
+        }
         val d = doc ?: return
         val r = renderer ?: return
         val page = binding.pageView.pageIndex
-        val sheet = activeSheet
         lifecycleScope.launch {
             val built = withContext(Dispatchers.IO) {
                 runCatching {

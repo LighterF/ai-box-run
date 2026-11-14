@@ -430,11 +430,12 @@
         </com.google.android.material.card.MaterialCardView>
 
         <TextView
+            android:id="@+id/version_info"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="22dp"
             android:gravity="center"
-            android:text="لِکسی‌لنز ۱.۰.۱\nواژه‌نامهٔ آفلاین: ویکی‌واژه، VahidN و مجموعهٔ Shirin\nمجوز واژه‌نامه: CC-BY-SA"
+            android:text="لِکسی‌لنز\nواژه‌نامهٔ آفلاین: ویکی‌واژه، VahidN و مجموعهٔ Shirin\nمجوز واژه‌نامه: CC-BY-SA"
             android:textColor="?attr/colorOnSurfaceVariant"
             android:textSize="11sp" />
 

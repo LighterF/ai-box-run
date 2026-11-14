@@ -277,6 +277,23 @@ object TextUtils {
 
     fun faNumber(value: Int): String = faDigits(value.toString())
 
+    /** Parses an integer typed with Persian, Arabic or Latin digits. */
+    fun parseNumber(raw: String): Int? {
+        val digits = StringBuilder(raw.length)
+        for (ch in raw.trim()) {
+            when {
+                ch in '0'..'9' -> digits.append(ch)
+                ch in '۰'..'۹' -> digits.append('0' + (ch - '۰'))
+                ch in '٠'..'٩' -> digits.append('0' + (ch - '٠'))
+                ch == ',' || ch == '،' || ch == '٬' || ch == '٫' ||
+                    ch == ' ' || ch == '\u200c' || ch == '_' -> Unit
+                else -> return null
+            }
+        }
+        if (digits.isEmpty()) return null
+        return digits.toString().toIntOrNull()
+    }
+
     fun relativeTime(epoch: Long): String {
         if (epoch <= 0) return "—"
         val diff = System.currentTimeMillis() - epoch

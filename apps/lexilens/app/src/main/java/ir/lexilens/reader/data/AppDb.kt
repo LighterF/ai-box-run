@@ -210,6 +210,17 @@ class AppDb(context: Context) : SQLiteOpenHelper(context, "lexilens.db", null, 2
 
     fun cardsForDocument(docId: Long): List<Card> = allCards("", docId)
 
+    fun cardsForWord(docId: Long, normWord: String): List<Card> {
+        if (normWord.isBlank()) return emptyList()
+        return queryCards(
+            "\n            SELECT c.*, d.title AS doc_title\n" +
+                "            FROM cards c JOIN documents d ON d.id = c.doc_id\n" +
+                "        WHERE c.doc_id = ? AND c.norm_word = ?\n" +
+                "ORDER BY c.created_at DESC",
+            arrayOf(docId.toString(), normWord),
+        )
+    }
+
     fun insertCard(card: Card): Long {
         val values = cardValues(card)
         return writableDatabase.insertWithOnConflict(

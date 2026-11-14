@@ -74,13 +74,13 @@ class ReviewActivity : AppCompatActivity() {
                 val stats = app.db.stats()
                 val reviewLimit = (prefs.reviewsPerDay - stats.reviewedToday).coerceAtLeast(0)
                 val newLimit = (prefs.newPerDay - stats.newToday).coerceAtLeast(0)
-                val learning = app.db.dueLearning(now, 200)
-                val reviews = app.db.dueReviews(now, min(reviewLimit, 500))
-                val fresh = app.db.newCards(min(newLimit, 100))
+                val learning = app.db.dueLearning(now, 500)
+                val reviews = app.db.dueReviews(now, min(reviewLimit, 1000))
+                val fresh = app.db.newCards(min(newLimit, 500))
                 (learning + reviews + fresh)
                     .filter { docId <= 0L || it.docId == docId }
                     .distinctBy { it.id }
-                    .take(500)
+                    .take(2000)
             }
             queue.clear()
             queue.addAll(loaded)

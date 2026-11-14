@@ -7,12 +7,12 @@ class Prefs(context: Context) {
     private val sp = context.getSharedPreferences("lexilens", Context.MODE_PRIVATE)
 
     var newPerDay: Int
-        get() = sp.getInt("new_per_day", 20).coerceIn(0, 200)
-        set(value) = sp.edit().putInt("new_per_day", value.coerceIn(0, 200)).apply()
+        get() = sp.getInt("new_per_day", 20).coerceIn(0, MAX_NEW_PER_DAY)
+        set(value) = sp.edit().putInt("new_per_day", value.coerceIn(0, MAX_NEW_PER_DAY)).apply()
 
     var reviewsPerDay: Int
-        get() = sp.getInt("reviews_per_day", 200).coerceIn(0, 2000)
-        set(value) = sp.edit().putInt("reviews_per_day", value.coerceIn(0, 2000)).apply()
+        get() = sp.getInt("reviews_per_day", 200).coerceIn(0, MAX_REVIEWS_PER_DAY)
+        set(value) = sp.edit().putInt("reviews_per_day", value.coerceIn(0, MAX_REVIEWS_PER_DAY)).apply()
 
     var autoPlay: Boolean
         get() = sp.getBoolean("auto_play", true)
@@ -37,4 +37,9 @@ class Prefs(context: Context) {
     var lastBackupAt: Long
         get() = sp.getLong("last_backup_at", 0L)
         set(value) = sp.edit().putLong("last_backup_at", value).apply()
+
+    companion object {
+        const val MAX_NEW_PER_DAY = 10_000
+        const val MAX_REVIEWS_PER_DAY = 100_000
+    }
 }
