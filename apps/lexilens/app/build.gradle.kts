@@ -18,8 +18,8 @@ android {
         applicationId = "ir.lexilens.reader"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.6.2"
+        versionCode = 14
+        versionName = "1.6.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         resourceConfigurations += listOf("fa", "en")
     }

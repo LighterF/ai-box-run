@@ -1,6 +1,10 @@
 package ir.lexilens.reader.pdf
 
+import kotlin.math.abs
 import kotlin.math.roundToInt
+
+/** Normal line step of a section plus whether it had enough samples to trust. */
+private data class LineAdvances(val normal: Float, val reliable: Boolean)
 
 /** Maps a range of characters in a reflowed paragraph back to its PDF word. */
 data class ReflowWordSpan(
@@ -202,7 +206,7 @@ object ReflowText {
         var previous: LineBox? = null
         var previousText: String? = null
         var pendingBlankLines = 0
-        val normalAdvance = normalLineAdvance(lines, medianHeight)
+        val advances = lineAdvances(lines, medianHeight)
 
         fun flush() {
             val value = text.toString().trim()
@@ -227,9 +231,9 @@ object ReflowText {
             }
             val prev = previous
             val prevText = previousText
-            val blankLines = if (prev == null) 0 else blankLinesBefore(prev, line, normalAdvance)
+            val blankLines = if (prev == null) 0 else blankLinesBefore(prev, line, advances)
             if (prev != null && prevText != null &&
-                startsNewParagraph(prev, line, prevText, medianHeight, rtl, blankLines)
+                startsNewParagraph(prev, line, prevText, medianHeight, rtl, advances, blankLines)
             ) {
                 flush()
                 pendingBlankLines = blankLines
@@ -261,11 +265,15 @@ object ReflowText {
         previousText: String,
         medianHeight: Float,
         rtl: Boolean,
+        advances: LineAdvances,
         blankLines: Int,
     ): Boolean {
         if (blankLines > 0) return true
         val height = maxOf(previous.h, current.h)
-        if (height > 0f) {
+        if (advances.reliable && advances.normal > 0f) {
+            val step = lineAdvance(previous, current) / advances.normal
+            if (step >= PARAGRAPH_STEP) return true
+        } else if (height > 0f) {
             val gap = current.y - previous.bottom
             if (gap > height * 1.7f) return true
         }
@@ -284,31 +292,70 @@ object ReflowText {
         return false
     }
 
+    /** Baseline-to-baseline distance that separates two consecutive lines. */
+    private fun lineAdvance(above: LineBox, below: LineBox): Float =
+        baseline(below) - baseline(above)
+
     /**
-     * Typical baseline-to-baseline distance in this reading unit, ignoring the
-     * unusually large gaps that are the paragraph breaks themselves.
+     * The extractor stores a line box as `y = baseline - height` with
+     * `h = 1.25 * height`, so this recovers the baseline exactly even when a
+     * line contains a larger glyph, superscript or inline object.
      */
-    private fun normalLineAdvance(lines: List<LineBox>, medianHeight: Float): Float {
-        val limit = if (medianHeight > 0f) medianHeight * 1.6f else Float.MAX_VALUE
-        val advances = lines.zipWithNext { above, below -> below.y - above.y }
-            .filter { it > 0f && it <= limit }
-        val normal = median(advances)
-        return if (normal > 0f) normal else medianHeight
+    private fun baseline(line: LineBox): Float = line.y + line.h * BASELINE_RATIO
+
+    /**
+     * Typical line step in this reading unit. It is computed from the real
+     * spacing in the page (the most repeated advance) rather than from the font
+     * size, because PDFs use every leading from tight to double-spaced. The
+     * mode keeps paragraph gaps, which are few, from inflating the estimate.
+     */
+    private fun lineAdvances(lines: List<LineBox>, medianHeight: Float): LineAdvances {
+        val samples = lines.zipWithNext { above, below -> lineAdvance(above, below) }
+            .filter { it > 0f && it.isFinite() }
+        if (samples.isEmpty()) {
+            return LineAdvances(medianHeight.coerceAtLeast(0f), reliable = false)
+        }
+        val normal = typicalAdvance(samples)
+        return LineAdvances(
+            normal = if (normal > 0f) normal else medianHeight.coerceAtLeast(0f),
+            reliable = samples.size >= 2,
+        )
+    }
+
+    /** Most repeated value, tolerant of sub-pixel jitter; ties pick the smaller. */
+    private fun typicalAdvance(samples: List<Float>): Float {
+        if (samples.isEmpty()) return 0f
+        val sorted = samples.sorted()
+        var best = sorted.first()
+        var bestCount = -1
+        for (candidate in sorted) {
+            val tolerance = maxOf(0.75f, candidate * 0.06f)
+            var count = 0
+            for (value in sorted) {
+                if (abs(value - candidate) <= tolerance) count++
+            }
+            if (count > bestCount) {
+                bestCount = count
+                best = candidate
+            }
+        }
+        return best
     }
 
     /**
-     * Counts the empty PDF lines between two text lines. One normal line step
-     * means no blank line, two steps mean one empty line, and so on.
+     * Counts the empty PDF lines between two text lines. Paragraph spacing below
+     * one full line step is handled by the paragraph gap itself; only a gap of
+     * roughly two or more normal steps is treated as a deliberate blank line.
      */
     private fun blankLinesBefore(
         previous: LineBox,
         current: LineBox,
-        normalAdvance: Float,
+        advances: LineAdvances,
     ): Int {
-        if (normalAdvance <= 0f) return 0
-        val steps = (current.y - previous.y) / normalAdvance
-        if (!steps.isFinite() || steps <= 1f) return 0
-        return (steps.roundToInt() - 1).coerceAtLeast(0).coerceAtMost(MAX_BLANK_LINES)
+        if (!advances.reliable || advances.normal <= 0f) return 0
+        val steps = lineAdvance(previous, current) / advances.normal
+        if (!steps.isFinite() || steps < BLANK_STEP) return 0
+        return (steps - 1f).roundToInt().coerceAtLeast(1).coerceAtMost(MAX_BLANK_LINES)
     }
 
     private fun looksLikeHeading(line: LineBox, medianHeight: Float): Boolean {
@@ -411,4 +458,7 @@ object ReflowText {
     private const val CLOSING_PUNCTUATION = ".,;:!?…۔؟،؛»”’)]}"
     private const val OPENING_PUNCTUATION = "«“‘([{"
     private const val MAX_BLANK_LINES = 8
+    private const val BASELINE_RATIO = 0.8f
+    private const val PARAGRAPH_STEP = 1.32f
+    private const val BLANK_STEP = 1.9f
 }

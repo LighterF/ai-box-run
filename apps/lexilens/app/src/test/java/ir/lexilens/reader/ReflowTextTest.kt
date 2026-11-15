@@ -80,7 +80,7 @@ class ReflowTextTest {
         val page = page(
             Spec("First paragraph fills the whole line and continues", 10f, 10f),
             Spec("to here.", 10f, 26f),
-            Spec("Scene break after one empty line.", 45f, 54f),
+            Spec("Scene break after one empty line.", 45f, 58f),
         )
 
         val content = ReflowText.build(page)
@@ -102,6 +102,54 @@ class ReflowTextTest {
 
         assertEquals(2, content.paragraphs.size)
         assertEquals(2, content.paragraphs[1].blankLinesBefore)
+    }
+
+    @Test
+    fun keepsOneParagraphWhenLeadingIsGenerous() {
+        val page = page(
+            Spec("The first line ends with a comma,", 10f, 10f),
+            Spec("and the sentence continues on this line", 10f, 40f),
+            Spec("until its final full stop.", 10f, 70f),
+        )
+
+        val content = ReflowText.build(page)
+
+        assertEquals(1, content.paragraphs.size)
+        assertEquals(
+            "The first line ends with a comma, and the sentence continues on this line" +
+                " until its final full stop.",
+            content.paragraphs[0].text,
+        )
+        assertEquals(0, content.paragraphs[0].blankLinesBefore)
+    }
+
+    @Test
+    fun keepsOneParagraphWhenLinesAreWidelySpaced() {
+        val page = page(
+            Spec("First line of the scene.", 10f, 10f),
+            Spec("Second line of the scene.", 10f, 46f),
+            Spec("Third line of the scene.", 10f, 82f),
+            Spec("Fourth line of the scene.", 10f, 118f),
+        )
+
+        val content = ReflowText.build(page)
+
+        assertEquals(1, content.paragraphs.size)
+    }
+
+    @Test
+    fun keepsBlankLineBetweenParagraphsWithGenerousLeading() {
+        val page = page(
+            Spec("Scene one begins here.", 10f, 10f),
+            Spec("It has two lines.", 10f, 40f),
+            Spec("Scene two starts after one empty line.", 10f, 100f),
+        )
+
+        val content = ReflowText.build(page)
+
+        assertEquals(2, content.paragraphs.size)
+        assertEquals(0, content.paragraphs[0].blankLinesBefore)
+        assertEquals(1, content.paragraphs[1].blankLinesBefore)
     }
 
     @Test
