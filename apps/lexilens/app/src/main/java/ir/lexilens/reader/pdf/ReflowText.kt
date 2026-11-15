@@ -58,14 +58,63 @@ object ReflowText {
         }
         if (lines.isEmpty()) return ReflowContent.EMPTY
 
-        val sections = orderReadingUnits(lines, page.width)
+        val rtl = RtlText.rtlShare(lines.joinToString(" ") { it.text }) > 0.5f
+        val visualOrder = rtl && linesAreVisual(page)
+        val sections = orderReadingUnits(lines, page.width, rtl)
         val medianHeight = median(lines.map { it.h }.filter { it > 0f })
         val paragraphs = mutableListOf<ReflowParagraph>()
         for (section in sections) {
-            paragraphs += buildSection(section, page, medianHeight)
+            paragraphs += buildSection(section, page, medianHeight, rtl, visualOrder)
         }
         return ReflowContent(paragraphs)
     }
+
+    /**
+     * True when the PDF stores RTL lines in visual (left-to-right) order. The
+     * first word of the extracted line then matches the leftmost word box; in a
+     * logical-order PDF it matches the rightmost one.
+     */
+    private fun linesAreVisual(page: PageText): Boolean {
+        var visual = 0
+        var logical = 0
+        for (line in page.lines) {
+            if (!RtlText.hasStrongRtl(line.text)) continue
+            val first = firstToken(normalize(line.text)) ?: continue
+            val left = page.words.getOrNull(line.wordStart) ?: continue
+            val right = page.words.getOrNull(line.wordEnd) ?: continue
+            if (sameToken(first, left.text)) visual++
+            else if (sameToken(first, right.text)) logical++
+        }
+        return visual > logical
+    }
+
+    private fun lineIsVisual(line: LineBox, page: PageText, fallback: Boolean): Boolean {
+        if (!RtlText.hasStrongRtl(line.text)) return false
+        val first = firstToken(normalize(line.text)) ?: return fallback
+        val left = page.words.getOrNull(line.wordStart) ?: return fallback
+        val right = page.words.getOrNull(line.wordEnd) ?: return fallback
+        if (sameToken(first, left.text)) return true
+        if (sameToken(first, right.text)) return false
+        return fallback
+    }
+
+    private fun firstToken(text: String): String? {
+        var start = -1
+        for (index in text.indices) {
+            if (text[index].isLetterOrDigit()) {
+                start = index
+                break
+            }
+        }
+        if (start < 0) return null
+        var end = start
+        while (end < text.length && (text[end].isLetterOrDigit() || text[end] == '\u200C')) end++
+        return text.substring(start, end)
+    }
+
+    private fun sameToken(first: String, second: String): Boolean =
+        first.equals(second, ignoreCase = true) ||
+            first.filter { it.isLetterOrDigit() } == second.filter { it.isLetterOrDigit() }
 
     // ---------------------------------------------------------------- columns
 
@@ -75,7 +124,11 @@ object ReflowText {
      * lines (titles, captions) split the page into horizontal bands so a title
      * stays above the columns it belongs to.
      */
-    private fun orderReadingUnits(lines: List<LineBox>, pageWidth: Float): List<List<LineBox>> {
+    private fun orderReadingUnits(
+        lines: List<LineBox>,
+        pageWidth: Float,
+        rtl: Boolean,
+    ): List<List<LineBox>> {
         val sorted = lines.sortedWith(compareBy({ it.y }, { it.x }))
         if (pageWidth <= 1f || !looksTwoColumn(sorted, pageWidth)) return listOf(sorted)
 
@@ -83,14 +136,12 @@ object ReflowText {
         var left = mutableListOf<LineBox>()
         var right = mutableListOf<LineBox>()
         fun flushColumns() {
-            if (left.isNotEmpty()) {
-                units.add(left.sortedWith(compareBy({ it.y }, { it.x })))
-                left = mutableListOf()
+            val ordered = if (rtl) listOf(right, left) else listOf(left, right)
+            for (column in ordered) {
+                if (column.isNotEmpty()) units.add(column.sortedWith(compareBy({ it.y }, { it.x })))
             }
-            if (right.isNotEmpty()) {
-                units.add(right.sortedWith(compareBy({ it.y }, { it.x })))
-                right = mutableListOf()
-            }
+            left = mutableListOf()
+            right = mutableListOf()
         }
 
         for (line in sorted) {
@@ -128,6 +179,8 @@ object ReflowText {
         lines: List<LineBox>,
         page: PageText,
         medianHeight: Float,
+        rtl: Boolean,
+        visualOrder: Boolean,
     ): List<ReflowParagraph> {
         val out = mutableListOf<ReflowParagraph>()
         val text = StringBuilder()
@@ -143,16 +196,26 @@ object ReflowText {
         }
 
         for (line in lines) {
-            val local = normalize(line.text)
-            if (local.isEmpty() || isSymbolLine(local)) continue
+            val raw = normalize(line.text)
+            if (raw.isEmpty() || isSymbolLine(raw)) continue
+            val visual = rtl && visualOrder && lineIsVisual(line, page, visualOrder)
+            val local = if (visual) RtlText.visualToLogical(raw) else raw
+            if (local.isBlank()) continue
+            val wordIndices = if (rtl && RtlText.hasStrongRtl(raw)) {
+                (line.wordStart..line.wordEnd).reversed().toList()
+            } else {
+                (line.wordStart..line.wordEnd).toList()
+            }
             val prev = previous
             val prevText = previousText
-            if (prev != null && prevText != null && startsNewParagraph(prev, line, prevText, medianHeight)) {
+            if (prev != null && prevText != null &&
+                startsNewParagraph(prev, line, prevText, medianHeight, rtl)
+            ) {
                 flush()
             }
             if (text.isEmpty()) {
                 text.append(local)
-                appendWordSpans(line, local, 0, page, words)
+                appendWordSpans(wordIndices, local, 0, line, page, visual, words)
             } else {
                 val joinHyphen = shouldJoinHyphen(prevText.orEmpty(), local)
                 if (joinHyphen) {
@@ -162,7 +225,7 @@ object ReflowText {
                 }
                 val offset = text.length
                 text.append(local)
-                appendWordSpans(line, local, offset, page, words)
+                appendWordSpans(wordIndices, local, offset, line, page, visual, words)
             }
             previous = line
             previousText = local
@@ -176,6 +239,7 @@ object ReflowText {
         current: LineBox,
         previousText: String,
         medianHeight: Float,
+        rtl: Boolean,
     ): Boolean {
         val height = maxOf(previous.h, current.h)
         if (height > 0f) {
@@ -184,8 +248,14 @@ object ReflowText {
         }
         if (looksLikeHeading(current, medianHeight) || looksLikeHeading(previous, medianHeight)) return true
         if (startsBullet(current.text)) return true
-        // A first-line indent is the most common paragraph marker in books.
-        if (current.x - previous.x > maxOf(height, 1f) * 0.9f &&
+        // A first-line indent is the most common paragraph marker in books; in
+        // RTL text it sits on the right edge of the line.
+        val indent = if (rtl) {
+            (previous.x + previous.w) - (current.x + current.w)
+        } else {
+            current.x - previous.x
+        }
+        if (indent > maxOf(height, 1f) * 0.9f &&
             !isHyphen(previousText.lastOrNull() ?: ' ')
         ) return true
         return false
@@ -236,30 +306,33 @@ object ReflowText {
     // ------------------------------------------------------------- word links
 
     private fun appendWordSpans(
-        line: LineBox,
+        indices: List<Int>,
         local: String,
         offset: Int,
+        line: LineBox,
         page: PageText,
+        visual: Boolean,
         out: MutableList<ReflowWordSpan>,
     ) {
-        val startWord = line.wordStart.coerceAtLeast(0)
-        val endWord = line.wordEnd.coerceAtMost(page.words.lastIndex)
-        if (startWord > endWord) return
         var cursor = 0
-        for (index in startWord..endWord) {
+        for (index in indices) {
             val word = page.words.getOrNull(index) ?: continue
             val token = word.text
             if (token.isEmpty()) continue
-            var at = local.indexOf(token, cursor, ignoreCase = true)
-            if (at < 0) at = local.indexOf(token, ignoreCase = true)
+            // In a visual-order RTL line both the line and the word token are
+            // mirrored; compare against their logical form.
+            val needle = if (visual) RtlText.visualToLogical(token) else token
+            var at = local.indexOf(needle, cursor, ignoreCase = true)
+            if (at < 0) at = local.indexOf(needle, ignoreCase = true)
             if (at < 0) {
-                val ratio = if (line.w > 0f) ((word.x - line.x) / line.w).coerceIn(0f, 1f) else 0f
-                at = (ratio * local.length).toInt().coerceIn(0, (local.length - token.length).coerceAtLeast(0))
+                var ratio = if (line.w > 0f) ((word.x - line.x) / line.w).coerceIn(0f, 1f) else 0f
+                if (visual) ratio = 1f - ratio
+                at = (ratio * local.length).toInt().coerceIn(0, (local.length - needle.length).coerceAtLeast(0))
             }
             val start = offset + at
-            val end = (start + token.length).coerceAtMost(offset + local.length)
+            val end = (start + needle.length).coerceAtMost(offset + local.length)
             if (end > start) out.add(ReflowWordSpan(index, start, end))
-            cursor = (at + token.length).coerceIn(0, local.length)
+            cursor = (at + needle.length).coerceIn(0, local.length)
         }
     }
 

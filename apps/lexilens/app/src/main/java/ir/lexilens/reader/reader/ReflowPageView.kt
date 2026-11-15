@@ -20,6 +20,7 @@ import android.widget.OverScroller
 import ir.lexilens.reader.pdf.ReflowContent
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Draws a reflowed PDF page as continuous, scrollable paragraphs. It owns no
@@ -77,6 +78,9 @@ class ReflowPageView @JvmOverloads constructor(
 
     private val density = resources.displayMetrics.density
     private val scaledDensity = resources.displayMetrics.scaledDensity
+    private val overscrollDistance = 58f * density
+    private val hitSlop = 14f * density
+    private val minFlingVelocity = 120f
     private val horizontalPadding = 22f * density
     private val fullTopPadding = 84f * density
     private val fullBottomPadding = 132f * density
@@ -98,11 +102,15 @@ class ReflowPageView @JvmOverloads constructor(
 
     private val layouts = ArrayList<StaticLayout>()
     private val paragraphTops = ArrayList<Float>()
+
+    /** Drawn rectangle of every word, used for pixel-accurate long-press hits. */
+    private val wordHits = ArrayList<WordHit>()
+
     private var emptyLayout: StaticLayout? = null
     private var emptyLayoutWidth = 0
     private var contentBottom = 0f
     private var maxScroll = 0
-    private var scrollY = 0
+    private var scrollY = 0f
     private var lastWidth = 0
     private var lastHeight = 0
 
@@ -111,7 +119,8 @@ class ReflowPageView @JvmOverloads constructor(
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
     private var downX = 0f
     private var downY = 0f
-    private var lastTouchY = 0f
+    private var dragAnchorY = 0f
+    private var dragAnchorScroll = 0f
     private var dragging = false
     private var longPressFired = false
     private var velocityTracker: VelocityTracker? = null
@@ -141,7 +150,7 @@ class ReflowPageView @JvmOverloads constructor(
             ""
         }
         emptyLayout = null
-        scrollY = 0
+        scrollY = 0f
         scroller.forceFinished(true)
         rebuild(keepScrollRatio = false)
     }
@@ -150,7 +159,7 @@ class ReflowPageView @JvmOverloads constructor(
         content = ReflowContent.EMPTY
         emptyText = message
         emptyLayout = null
-        scrollY = 0
+        scrollY = 0f
         scroller.forceFinished(true)
         rebuild(keepScrollRatio = false)
     }
@@ -159,7 +168,7 @@ class ReflowPageView @JvmOverloads constructor(
         content = ReflowContent.EMPTY
         emptyText = "این صفحه متن قابل بازچینش ندارد؛ شاید اسکن‌شده باشد."
         emptyLayout = null
-        scrollY = 0
+        scrollY = 0f
         scroller.forceFinished(true)
         rebuild(keepScrollRatio = false)
     }
@@ -176,30 +185,43 @@ class ReflowPageView @JvmOverloads constructor(
 
     fun scrollToTop() {
         scroller.forceFinished(true)
-        scrollY = 0
+        scrollY = 0f
         invalidate()
     }
 
+    /** Current vertical offset in content space; negative/over-max while overscrolled. */
+    internal fun currentScrollOffset(): Float = scrollY
+
     /** Exposed for tests and for the activity's diagnostics. */
     fun wordIndexAt(viewX: Float, viewY: Float): Int? {
-        if (layouts.isEmpty()) return null
+        if (wordHits.isEmpty()) return null
+        val x = viewX - horizontalPadding
         val y = viewY + scrollY - topPadding
-        if (y < 0f) return null
-        for (i in layouts.indices) {
-            val top = paragraphTops[i]
-            val layout = layouts[i]
-            if (y < top || y > top + layout.height) continue
-            val localY = (y - top).toInt().coerceIn(0, (layout.height - 1).coerceAtLeast(0))
-            val line = layout.getLineForVertical(localY)
-            val x = (viewX - horizontalPadding).coerceIn(0f, layout.width.toFloat())
-            val offset = layout.getOffsetForHorizontal(line, x)
-            return content.paragraphs.getOrNull(i)?.wordAt(offset)
+        var best: WordHit? = null
+        var bestDistance = Float.MAX_VALUE
+        for (hit in wordHits) {
+            val dx = when {
+                x < hit.left -> hit.left - x
+                x > hit.right -> x - hit.right
+                else -> 0f
+            }
+            val dy = when {
+                y < hit.top -> hit.top - y
+                y > hit.bottom -> y - hit.bottom
+                else -> 0f
+            }
+            val distance = dx * dx + dy * dy
+            if (distance < bestDistance) {
+                bestDistance = distance
+                best = hit
+            }
         }
-        return null
+        val slop = hitSlop * hitSlop
+        return if (best != null && bestDistance <= slop) best.wordIndex else null
     }
 
     private fun rebuild(keepScrollRatio: Boolean) {
-        val ratio = if (keepScrollRatio && maxScroll > 0) scrollY.toFloat() / maxScroll else 0f
+        val ratio = if (keepScrollRatio && maxScroll > 0) scrollY / maxScroll else 0f
         layouts.clear()
         paragraphTops.clear()
         emptyLayout = null
@@ -207,9 +229,10 @@ class ReflowPageView @JvmOverloads constructor(
         val width = width
         val height = height
         if (width <= 0) {
+            wordHits.clear()
             contentBottom = 0f
             maxScroll = 0
-            scrollY = 0
+            scrollY = 0f
             return
         }
         val available = (width - 2f * horizontalPadding).coerceAtLeast(80f)
@@ -248,23 +271,88 @@ class ReflowPageView @JvmOverloads constructor(
         contentBottom = topPadding + y + bottomPadding
         maxScroll = max(0, (contentBottom - height).toInt())
         scrollY = if (keepScrollRatio) {
-            (ratio * maxScroll).toInt().coerceIn(0, maxScroll)
+            ratio * maxScroll
         } else {
-            0
+            0f
         }
+        scrollY = scrollY.coerceIn(0f, maxScroll.toFloat())
+        buildWordHits()
         lastWidth = width
         lastHeight = height
     }
 
-    private fun scrollBy(dy: Float) {
-        if (maxScroll <= 0 || dy == 0f) return
-        scrollY = (scrollY + dy.toInt()).coerceIn(0, maxScroll)
+    /** Records where each word is actually painted so hits never guess. */
+    private fun buildWordHits() {
+        wordHits.clear()
+        if (layouts.isEmpty()) return
+        for (i in layouts.indices) {
+            val layout = layouts[i]
+            val paragraph = content.paragraphs.getOrNull(i) ?: continue
+            val paragraphTop = paragraphTops[i]
+            for (span in paragraph.words) {
+                val start = span.start.coerceIn(0, layout.text.length)
+                val end = span.end.coerceIn(start, layout.text.length)
+                if (end <= start) continue
+                val firstLine = layout.getLineForOffset(start)
+                val lastLine = layout.getLineForOffset((end - 1).coerceAtLeast(0))
+                for (line in firstLine..lastLine) {
+                    val lineStart = layout.getLineStart(line)
+                    val lineEnd = layout.getLineEnd(line)
+                    val from = max(start, lineStart)
+                    val to = min(end, lineEnd)
+                    if (to <= from) continue
+                    val left = min(
+                        layout.getPrimaryHorizontal(from),
+                        layout.getSecondaryHorizontal(from),
+                    )
+                    val right = max(
+                        layout.getPrimaryHorizontal(to),
+                        layout.getSecondaryHorizontal(to),
+                    )
+                    if (right - left < 1f) continue
+                    wordHits.add(
+                        WordHit(
+                            wordIndex = span.wordIndex,
+                            left = left,
+                            right = right,
+                            top = paragraphTop + layout.getLineTop(line),
+                            bottom = paragraphTop + layout.getLineBottom(line),
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /** Content-space drag, rubber-banded past the ends instead of hard-stopping. */
+    private fun scrollWithFinger(fingerY: Float) {
+        scrollY = rubberBand(dragAnchorScroll + (dragAnchorY - fingerY))
         invalidate()
+    }
+
+    private fun rubberBand(raw: Float): Float {
+        val max = maxScroll.toFloat()
+        if (max <= 0f) return 0f
+        return when {
+            raw < 0f -> -dampen(-raw)
+            raw > max -> max + dampen(raw - max)
+            else -> raw
+        }.coerceIn(-overscrollDistance, max + overscrollDistance)
+    }
+
+    private fun dampen(distance: Float): Float =
+        overscrollDistance * (1f - 1f / (distance / overscrollDistance * 0.6f + 1f))
+
+    private fun settle() {
+        if (scrollY < 0f || scrollY > maxScroll) {
+            scroller.springBack(0, scrollY.toInt(), 0, 0, 0, maxScroll)
+            postInvalidateOnAnimation()
+        }
     }
 
     override fun computeScroll() {
         if (scroller.computeScrollOffset()) {
-            scrollY = scroller.currY.coerceIn(0, maxScroll)
+            scrollY = scroller.currY.toFloat()
             postInvalidateOnAnimation()
         }
     }
@@ -305,8 +393,10 @@ class ReflowPageView @JvmOverloads constructor(
                 scroller.forceFinished(true)
                 downX = event.x
                 downY = event.y
-                lastTouchY = event.y
+                dragAnchorY = event.y
+                dragAnchorScroll = scrollY
                 dragging = false
+                if (scrollY < 0f || scrollY > maxScroll) settle()
                 longPressFired = false
                 velocityTracker?.recycle()
                 velocityTracker = VelocityTracker.obtain().also { it.addMovement(event) }
@@ -326,8 +416,7 @@ class ReflowPageView @JvmOverloads constructor(
                     }
                 }
                 if (dragging) {
-                    scrollBy(lastTouchY - event.y)
-                    lastTouchY = event.y
+                    scrollWithFinger(event.y)
                 }
                 return true
             }
@@ -336,19 +425,26 @@ class ReflowPageView @JvmOverloads constructor(
                 handler.removeCallbacks(longPressRunnable)
                 val wasDragging = dragging
                 if (wasDragging) {
-                    velocityTracker?.computeCurrentVelocity(1000)
-                    val vy = velocityTracker?.yVelocity ?: 0f
-                    if (abs(vy) > 120f) {
-                        scroller.fling(
-                            0,
-                            scrollY,
-                            0,
-                            -vy.toInt(),
-                            0,
-                            0,
-                            0,
-                            maxScroll,
-                        )
+                    if (scrollY < 0f || scrollY > maxScroll) {
+                        settle()
+                    } else {
+                        velocityTracker?.computeCurrentVelocity(1000)
+                        val vy = velocityTracker?.yVelocity ?: 0f
+                        val maxVelocity = ViewConfiguration.get(context)
+                            .scaledMaximumFlingVelocity.toFloat()
+                        val clampedVy = vy.coerceIn(-maxVelocity, maxVelocity)
+                        if (abs(clampedVy) > minFlingVelocity) {
+                            scroller.fling(
+                                0,
+                                scrollY.toInt(),
+                                0,
+                                -clampedVy.toInt(),
+                                0,
+                                0,
+                                0,
+                                maxScroll,
+                            )
+                        }
                     }
                 } else if (!longPressFired) {
                     listener?.onTap()
@@ -362,6 +458,7 @@ class ReflowPageView @JvmOverloads constructor(
 
             MotionEvent.ACTION_CANCEL -> {
                 handler.removeCallbacks(longPressRunnable)
+                if (scrollY < 0f || scrollY > maxScroll) settle()
                 dragging = false
                 velocityTracker?.recycle()
                 velocityTracker = null
@@ -371,6 +468,14 @@ class ReflowPageView @JvmOverloads constructor(
         }
         return super.onTouchEvent(event)
     }
+
+    private data class WordHit(
+        val wordIndex: Int,
+        val left: Float,
+        val right: Float,
+        val top: Float,
+        val bottom: Float,
+    )
 
     override fun onDetachedFromWindow() {
         handler.removeCallbacks(longPressRunnable)
