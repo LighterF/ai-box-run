@@ -8,6 +8,8 @@ import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
 import android.text.Layout
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.util.AttributeSet
@@ -18,6 +20,7 @@ import android.view.ViewConfiguration
 import android.view.VelocityTracker
 import android.widget.OverScroller
 import ir.lexilens.reader.pdf.ReflowContent
+import ir.lexilens.reader.pdf.ReflowParagraph
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -63,6 +66,27 @@ class ReflowPageView @JvmOverloads constructor(
             val clamped = value.coerceIn(MIN_TEXT_PERCENT, MAX_TEXT_PERCENT)
             if (field == clamped) return
             field = clamped
+            rebuild(keepScrollRatio = true)
+        }
+
+    /** Base face for reflowed text; by default it mirrors the PDF's own font. */
+    var textTypeface: Typeface = Typeface.create(Typeface.SERIF, Typeface.NORMAL)
+        set(value) {
+            if (field == value) return
+            field = value
+            paint.typeface = value
+            emptyPaint.typeface = value
+            rebuild(keepScrollRatio = true)
+        }
+
+    /**
+     * Real italic face when the PDF embeds one; when null the view slants the
+     * base face itself so italic words still stand out from the text.
+     */
+    var italicTypeface: Typeface? = null
+        set(value) {
+            if (field == value) return
+            field = value
             rebuild(keepScrollRatio = true)
         }
 
@@ -254,8 +278,9 @@ class ReflowPageView @JvmOverloads constructor(
             }
         } else {
             for (paragraph in content.paragraphs) {
+                val styled = styledParagraph(paragraph)
                 val layout = StaticLayout.Builder
-                    .obtain(paragraph.text, 0, paragraph.text.length, paint, available.toInt())
+                    .obtain(styled, 0, styled.length, paint, available.toInt())
                     .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                     .setLineSpacing(0f, 1.22f)
                     .setIncludePad(false)
@@ -279,6 +304,28 @@ class ReflowPageView @JvmOverloads constructor(
         buildWordHits()
         lastWidth = width
         lastHeight = height
+    }
+
+    /**
+     * Rebuilds the paragraph with italic spans where the PDF itself used an
+     * italic face, so "I want" keeps only its "I" slanted.
+     */
+    private fun styledParagraph(paragraph: ReflowParagraph): CharSequence {
+        if (paragraph.words.none { it.italic }) return paragraph.text
+        val styled = SpannableString(paragraph.text)
+        for (span in paragraph.words) {
+            if (!span.italic) continue
+            val start = span.start.coerceIn(0, styled.length)
+            val end = span.end.coerceIn(start, styled.length)
+            if (end <= start) continue
+            styled.setSpan(
+                ReflowItalicSpan(italicTypeface),
+                start,
+                end,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+        }
+        return styled
     }
 
     /** Records where each word is actually painted so hits never guess. */

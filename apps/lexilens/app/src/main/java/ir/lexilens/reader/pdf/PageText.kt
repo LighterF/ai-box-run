@@ -11,6 +11,8 @@ data class WordBox(
     val w: Float,
     val h: Float,
     val line: Int,
+    /** True when most of the glyphs in the word use an italic/oblique font. */
+    val italic: Boolean = false,
 ) {
     val right: Float get() = x + w
     val bottom: Float get() = y + h
@@ -106,7 +108,7 @@ data class PageText(
 
     fun toJson(): JSONObject {
         val root = JSONObject()
-        root.put("v", 4)
+        root.put("v", 5)
         root.put("width", width.toDouble())
         root.put("height", height.toDouble())
         root.put("rotation", rotation)
@@ -119,6 +121,7 @@ data class PageText(
                 put(w.w.toDouble())
                 put(w.h.toDouble())
                 put(w.line)
+                put(w.italic)
             })
         }
         root.put("words", ws)
@@ -362,6 +365,7 @@ data class PageText(
                         w = a.getDouble(3).toFloat(),
                         h = a.getDouble(4).toFloat(),
                         line = a.getInt(5),
+                        italic = a.optBoolean(6, false),
                     )
                 )
             }

@@ -56,7 +56,7 @@ class PdfTextExtractor(
         if (!f.exists()) return null
         return runCatching {
             val json = JSONObject(f.readText())
-            if (json.optInt("v", 0) < 4) return null
+            if (json.optInt("v", 0) < 5) return null
             PageText.fromJson(json)
         }.getOrNull()
     }
@@ -122,6 +122,7 @@ class PdfTextExtractor(
                     w = p.widthDirAdj.coerceAtLeast(1f),
                     h = gh * 1.25f,
                     space = p.widthOfSpace.takeIf { it.isFinite() && it > 0f } ?: 0f,
+                    italic = isItalic(p),
                 )
             }.filter { it.text.any { ch -> !ch.isWhitespace() } }
 
@@ -196,6 +197,7 @@ class PdfTextExtractor(
                                     w = (x1 - x0).coerceAtLeast(1f),
                                     h = (y1 - y0).coerceAtLeast(1f),
                                     line = lineBoxes.size,
+                                    italic = isMostlyItalic(current),
                                 )
                             )
                         }
@@ -261,6 +263,32 @@ class PdfTextExtractor(
             }
             return sb.toString().replace(Regex("\\s+"), " ").trim()
         }
+
+        /**
+         * Words are the unit of the long-press lookup and of reflow styling, so
+         * a word counts as italic when at least half of its glyphs come from an
+         * italic face. Mixed runs inside one word (rare) keep the majority.
+         */
+        private fun isMostlyItalic(chars: List<CharBox>): Boolean {
+            if (chars.isEmpty()) return false
+            val italic = chars.count { it.italic && it.text.any { ch -> ch.isLetterOrDigit() } }
+            val total = chars.count { it.text.any { ch -> ch.isLetterOrDigit() } }
+            if (total == 0) return false
+            return italic * 2 >= total
+        }
+
+        private fun isItalic(position: TextPosition): Boolean {
+            val font = position.font
+            if (font == null) return false
+            val descriptor = runCatching { font.fontDescriptor }.getOrNull()
+            if (descriptor != null) {
+                if (runCatching { descriptor.isItalic }.getOrDefault(false)) return true
+                val angle = runCatching { descriptor.italicAngle }.getOrNull() ?: 0f
+                if (angle != 0f && angle.isFinite()) return true
+            }
+            val name = runCatching { font.name }.getOrNull().orEmpty().lowercase()
+            return name.contains("italic") || name.contains("oblique")
+        }
     }
 
     private data class CharBox(
@@ -270,5 +298,6 @@ class PdfTextExtractor(
         val w: Float,
         val h: Float,
         val space: Float,
+        val italic: Boolean,
     )
 }

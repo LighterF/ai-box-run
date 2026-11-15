@@ -1,7 +1,12 @@
 package ir.lexilens.reader.pdf
 
 /** Maps a range of characters in a reflowed paragraph back to its PDF word. */
-data class ReflowWordSpan(val wordIndex: Int, val start: Int, val end: Int)
+data class ReflowWordSpan(
+    val wordIndex: Int,
+    val start: Int,
+    val end: Int,
+    val italic: Boolean = false,
+)
 
 data class ReflowParagraph(
     val text: String,
@@ -331,7 +336,7 @@ object ReflowText {
             }
             val start = offset + at
             val end = (start + needle.length).coerceAtMost(offset + local.length)
-            if (end > start) out.add(ReflowWordSpan(index, start, end))
+            if (end > start) out.add(ReflowWordSpan(index, start, end, word.italic))
             cursor = (at + needle.length).coerceIn(0, local.length)
         }
     }

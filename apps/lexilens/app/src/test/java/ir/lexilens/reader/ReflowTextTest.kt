@@ -5,6 +5,7 @@ import ir.lexilens.reader.pdf.PageText
 import ir.lexilens.reader.pdf.ReflowText
 import ir.lexilens.reader.pdf.WordBox
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -152,13 +153,34 @@ class ReflowTextTest {
     }
 
     @Test
+    fun keepsItalicWordsWhenBuildingParagraphs() {
+        val page = page(Spec("I want to read this book.", 10f, 10f, italic = setOf("I")))
+
+        val content = ReflowText.build(page)
+        val paragraph = content.paragraphs[0]
+        val iWord = page.words.indexOfFirst { it.text == "I" }
+        val wantWord = page.words.indexOfFirst { it.text == "want" }
+        val italicSpan = paragraph.words.first { it.wordIndex == iWord }
+        val plainSpan = paragraph.words.first { it.wordIndex == wantWord }
+
+        assertTrue(italicSpan.italic)
+        assertEquals("I", paragraph.text.substring(italicSpan.start, italicSpan.end))
+        assertFalse(plainSpan.italic)
+    }
+
+    @Test
     fun emptyPageProducesEmptyContent() {
         val page = PageText(600f, 800f, emptyList(), emptyList())
 
         assertTrue(ReflowText.build(page).isEmpty)
     }
 
-    private data class Spec(val text: String, val x: Float, val y: Float)
+    private data class Spec(
+        val text: String,
+        val x: Float,
+        val y: Float,
+        val italic: Set<String> = emptySet(),
+    )
 
     private fun page(
         vararg specs: Spec,
@@ -177,7 +199,17 @@ class ReflowTextTest {
                 }
                 if (token.isNotEmpty()) {
                     val width = (token.length * 6f + 4f).coerceAtLeast(7f)
-                    words.add(WordBox(token, x, spec.y, width, height, lineIndex))
+                    words.add(
+                        WordBox(
+                            token,
+                            x,
+                            spec.y,
+                            width,
+                            height,
+                            lineIndex,
+                            italic = token in spec.italic,
+                        )
+                    )
                     x += width + 4f
                 } else {
                     x += 5f

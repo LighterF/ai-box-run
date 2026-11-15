@@ -1,10 +1,12 @@
 package ir.lexilens.reader.reader
 
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
 import android.widget.SeekBar
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -22,6 +24,8 @@ import ir.lexilens.reader.data.Prefs
 import ir.lexilens.reader.databinding.ActivityReaderBinding
 import ir.lexilens.reader.pdf.PageRenderer
 import ir.lexilens.reader.pdf.PageText
+import ir.lexilens.reader.pdf.PdfFontFace
+import ir.lexilens.reader.pdf.PdfFonts
 import ir.lexilens.reader.pdf.PdfTextExtractor
 import ir.lexilens.reader.pdf.ReflowText
 import ir.lexilens.reader.pdf.WordBox
@@ -53,6 +57,12 @@ class ReaderActivity : AppCompatActivity() {
     private var textSizeGuard = false
     private var reflowEnabled = false
     private var themeSheet: ReflowThemeSheet? = null
+    private var pdfFace: PdfFontFace = PdfFontFace.NONE
+
+    private val importFontLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) importFont(uri)
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -162,6 +172,7 @@ class ReaderActivity : AppCompatActivity() {
         setupReflow()
         reflowEnabled = prefs.reflowEnabled
         applyMode()
+        loadPdfFont(File(loaded.path))
         updatePageUi(binding.pageView.pageIndex)
         prefetchText(binding.pageView.pageIndex)
 
@@ -402,6 +413,7 @@ class ReaderActivity : AppCompatActivity() {
         binding.reflowView.textSizePercent = prefs.reflowTextPercent
         binding.reflowView.pageBackground = prefs.reflowBackground
         binding.reflowView.pageTextColor = prefs.reflowTextColor
+        applyReflowFont()
         setTextSizeControls(prefs.reflowTextPercent)
 
         binding.reflowButton.setOnClickListener { toggleReflow() }
@@ -449,6 +461,7 @@ class ReaderActivity : AppCompatActivity() {
             binding.reflowView.pageBackground = prefs.reflowBackground
             binding.reflowView.pageTextColor = prefs.reflowTextColor
             binding.reflowView.textSizePercent = prefs.reflowTextPercent
+            applyReflowFont()
             setTextSizeControls(prefs.reflowTextPercent)
             val page = binding.pageView.pageIndex
             val text = pageText?.takeIf { pageTextPage == page }
@@ -486,14 +499,100 @@ class ReaderActivity : AppCompatActivity() {
             context = this,
             background = prefs.reflowBackground,
             text = prefs.reflowTextColor,
-        ) { background, text ->
-            prefs.reflowBackground = background
-            prefs.reflowTextColor = text
-            binding.reflowView.pageBackground = background
-            binding.reflowView.pageTextColor = text
-            updateSystemBarIcons()
-        }
+            fontId = prefs.reflowFontId,
+            fontOptions = ReflowFonts.options(this, pdfFace),
+            onColorsChange = { background, text ->
+                prefs.reflowBackground = background
+                prefs.reflowTextColor = text
+                binding.reflowView.pageBackground = background
+                binding.reflowView.pageTextColor = text
+                updateSystemBarIcons()
+            },
+            onFontChange = { id ->
+                prefs.reflowFontId = id
+                applyReflowFont()
+            },
+            onImportFont = {
+                importFontLauncher.launch(
+                    arrayOf(
+                        "font/ttf",
+                        "font/otf",
+                        "font/collection",
+                        "application/font-sfnt",
+                        "application/x-font-ttf",
+                        "application/x-font-truetype",
+                        "application/x-font-opentype",
+                        "application/vnd.ms-opentype",
+                        "application/ttf",
+                        "application/otf",
+                        "application/octet-stream",
+                    ),
+                )
+            },
+            onDeleteFont = { id -> deleteImportedFont(id) },
+        )
         themeSheet?.show()
+    }
+
+    // ------------------------------------------------------------------ fonts
+
+    private fun loadPdfFont(file: File) {
+        val id = doc?.id ?: return
+        lifecycleScope.launch {
+            val face = withContext(Dispatchers.IO) {
+                runCatching { PdfFonts.load(this@ReaderActivity, id, file) }.getOrDefault(PdfFontFace.NONE)
+            }
+            if (isFinishing || isDestroyed) return@launch
+            pdfFace = face
+            applyReflowFont()
+            refreshThemeFonts()
+        }
+    }
+
+    private fun applyReflowFont() {
+        val option = ReflowFonts.resolve(this, prefs.reflowFontId, pdfFace)
+        if (option.id != prefs.reflowFontId) prefs.reflowFontId = option.id
+        binding.reflowView.textTypeface = option.typeface
+        binding.reflowView.italicTypeface = option.italicTypeface
+    }
+
+    private fun refreshThemeFonts() {
+        themeSheet?.updateFonts(
+            ReflowFonts.options(this, pdfFace),
+            prefs.reflowFontId,
+        )
+    }
+
+    private fun importFont(uri: Uri) {
+        val snack = Snackbar.make(binding.root, "در حال افزودن فونت…", Snackbar.LENGTH_INDEFINITE)
+        snack.show()
+        lifecycleScope.launch {
+            val option = withContext(Dispatchers.IO) {
+                runCatching { ReflowFonts.importFrom(this@ReaderActivity, uri) }.getOrNull()
+            }
+            snack.dismiss()
+            if (isFinishing || isDestroyed) return@launch
+            if (option == null) {
+                Snackbar.make(
+                    binding.root,
+                    "این فایل به‌عنوان فونت خوانده نشد؛ یک فایل TTF یا OTF انتخاب کن.",
+                    Snackbar.LENGTH_LONG,
+                ).show()
+                return@launch
+            }
+            prefs.reflowFontId = option.id
+            applyReflowFont()
+            refreshThemeFonts()
+            Snackbar.make(binding.root, "فونت «${option.label}» اضافه و انتخاب شد", Snackbar.LENGTH_LONG).show()
+        }
+    }
+
+    private fun deleteImportedFont(id: String) {
+        if (!ReflowFonts.deleteImported(this, id)) return
+        if (prefs.reflowFontId == id) prefs.reflowFontId = ReflowFonts.ID_PDF
+        applyReflowFont()
+        refreshThemeFonts()
+        Snackbar.make(binding.root, "فونت حذف شد", Snackbar.LENGTH_SHORT).show()
     }
 
     private fun updateSystemBarIcons() {

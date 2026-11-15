@@ -150,7 +150,9 @@ class PdfPageView @JvmOverloads constructor(
             override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
                 if (isPanning(bitmaps[pageIndex])) return false
                 if (abs(dragOffset) > 20f || abs(vx) > 450f) {
-                    val forward = if (abs(dragOffset) > 20f) dragOffset > 0 else vx > 0
+                    // A right-to-left flick (negative vx, negative dragOffset)
+                    // advances the book, matching the direction of a Persian page.
+                    val forward = if (abs(dragOffset) > 20f) dragOffset < 0 else vx < 0
                     commitTurn(forward)
                 } else {
                     animateDragBack()
@@ -487,8 +489,9 @@ class PdfPageView @JvmOverloads constructor(
             return
         }
         isTurning = true
-        // RTL page flow: the next page sits on the left, the previous on the right.
-        val direction = if (forward) 1f else -1f
+        // Swiping right-to-left slides the current page off to the left, so the
+        // next page comes in from the right (a normal forward page turn).
+        val direction = if (forward) -1f else 1f
         val animator = ValueAnimator.ofFloat(dragOffset, direction * width)
         animator.duration = 220
         animator.interpolator = DecelerateInterpolator()
@@ -554,10 +557,11 @@ class PdfPageView @JvmOverloads constructor(
         )
 
         if (abs(dragOffset) > 0.5f && zoom <= 1.01f) {
-            val neighborIndex = if (dragOffset > 0) pageIndex + 1 else pageIndex - 1
+            // Negative offset means a forward turn: the next page waits on the right.
+            val neighborIndex = if (dragOffset < 0) pageIndex + 1 else pageIndex - 1
             val neighbor = bitmaps[neighborIndex]
             if (neighbor != null) {
-                val nx = if (dragOffset > 0) tx - width + dragOffset else tx + width + dragOffset
+                val nx = if (dragOffset < 0) tx + width + dragOffset else tx - width + dragOffset
                 val ndst = RectF(nx, ty, nx + neighbor.width * drawScale, ty + neighbor.height * drawScale)
                 canvas.drawBitmap(neighbor, null, ndst, bitmapPaint)
             }
@@ -608,7 +612,7 @@ class PdfPageView @JvmOverloads constructor(
         ) {
             if (!isTurning && abs(dragOffset) > 0f && zoom <= 1.01f) {
                 if (abs(dragOffset) > width * 0.22f) {
-                    commitTurn(dragOffset > 0)
+                    commitTurn(dragOffset < 0)
                 } else {
                     animateDragBack()
                 }

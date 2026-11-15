@@ -2,7 +2,10 @@ package ir.lexilens.reader.reader
 
 import android.content.Context
 import android.graphics.Color
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.SpannableString
+import android.text.Spanned
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -13,24 +16,31 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import ir.lexilens.reader.databinding.SheetReflowThemeBinding
 
 /**
- * Bottom sheet for the reflow reader's appearance. It applies the chosen
- * colours live, so the page behind the sheet changes while the user tries a
- * preset or a swatch.
+ * Bottom sheet for the reflow reader's appearance. It applies colours and the
+ * font live, so the page behind the sheet changes while the user tries a
+ * preset, a swatch or a face.
  */
 class ReflowThemeSheet(
     private val context: Context,
     private var background: Int,
     private var text: Int,
-    private val onChange: (background: Int, text: Int) -> Unit,
+    private var fontId: String,
+    private var fontOptions: List<ReflowFontOption>,
+    private val onColorsChange: (background: Int, text: Int) -> Unit,
+    private val onFontChange: (id: String) -> Unit,
+    private val onImportFont: () -> Unit,
+    private val onDeleteFont: (id: String) -> Unit,
 ) {
     private val dialog = BottomSheetDialog(context)
     private val binding = SheetReflowThemeBinding.inflate(LayoutInflater.from(context))
     private val presetCards = mutableListOf<Pair<ReflowTheme, LinearLayout>>()
     private val textSwatches = mutableListOf<Pair<Int, FrameLayout>>()
     private val backgroundSwatches = mutableListOf<Pair<Int, FrameLayout>>()
+    private val fontCards = mutableListOf<Pair<ReflowFontOption, LinearLayout>>()
     private val density = context.resources.displayMetrics.density
 
     init {
@@ -39,9 +49,11 @@ class ReflowThemeSheet(
         dialog.behavior.skipCollapsed = true
         buildPresets()
         buildSwatches()
+        buildFonts()
         binding.resetButton.setOnClickListener {
             apply(ReflowThemes.default.background, ReflowThemes.default.text)
         }
+        binding.importFontButton.setOnClickListener { onImportFont() }
         binding.doneButton.setOnClickListener { dialog.dismiss() }
         render()
     }
@@ -50,6 +62,14 @@ class ReflowThemeSheet(
 
     fun dismiss() {
         if (dialog.isShowing) dialog.dismiss()
+    }
+
+    /** Re-renders the font row after an import or a deletion. */
+    fun updateFonts(options: List<ReflowFontOption>, selectedId: String) {
+        fontOptions = options
+        fontId = selectedId
+        buildFonts()
+        render()
     }
 
     private fun buildPresets() {
@@ -67,10 +87,7 @@ class ReflowThemeSheet(
             val sample = TextView(context).apply {
                 text = "Aa"
                 textSize = 19f
-                typeface = android.graphics.Typeface.create(
-                    android.graphics.Typeface.SERIF,
-                    android.graphics.Typeface.BOLD,
-                )
+                typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
                 setTextColor(theme.text)
                 gravity = Gravity.CENTER
             }
@@ -107,6 +124,68 @@ class ReflowThemeSheet(
             binding.backgroundSwatches.addView(swatch, swatchParams())
             backgroundSwatches.add(color to swatch)
         }
+    }
+
+    private fun buildFonts() {
+        binding.fontRow.removeAllViews()
+        fontCards.clear()
+        fontOptions.forEach { option ->
+            val card = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(9), dp(7), dp(9), dp(7))
+                isClickable = true
+                isFocusable = true
+                contentDescription = "فونت ${option.label}"
+                setOnClickListener { applyFont(option) }
+                if (option.removable) {
+                    isLongClickable = true
+                    setOnLongClickListener {
+                        confirmDelete(option)
+                        true
+                    }
+                }
+            }
+            val sample = TextView(context).apply {
+                text = "Aa اب"
+                textSize = 19f
+                typeface = option.typeface
+                gravity = Gravity.CENTER
+                maxLines = 1
+            }
+            val label = TextView(context).apply {
+                text = option.label
+                textSize = 11f
+                gravity = Gravity.CENTER
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            val subtitle = TextView(context).apply {
+                text = option.subtitle
+                textSize = 8.5f
+                gravity = Gravity.CENTER
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            card.addView(sample)
+            card.addView(label)
+            card.addView(subtitle)
+            val lp = LinearLayout.LayoutParams(dp(112), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = dp(3)
+                marginEnd = dp(3)
+            }
+            binding.fontRow.addView(card, lp)
+            fontCards.add(option to card)
+        }
+    }
+
+    private fun confirmDelete(option: ReflowFontOption) {
+        MaterialAlertDialogBuilder(context)
+            .setTitle("حذف فونت «${option.label}»؟")
+            .setMessage("فقط از فهرست فونت‌های اضافه‌شده حذف می‌شود؛ فایل اصلی روی گوشی دست‌نخورده می‌ماند.")
+            .setNegativeButton("نه") { _, _ -> }
+            .setPositiveButton("حذف") { _, _ -> onDeleteFont(option.id) }
+            .show()
     }
 
     private fun makeSwatch(color: Int): FrameLayout {
@@ -151,16 +230,30 @@ class ReflowThemeSheet(
         background = newBackground
         text = newText
         render()
-        onChange(background, text)
+        onColorsChange(background, text)
     }
 
+    private fun applyFont(option: ReflowFontOption) {
+        if (fontId == option.id) return
+        fontId = option.id
+        render()
+        onFontChange(fontId)
+    }
+
+    private fun currentFont(): ReflowFontOption? =
+        fontOptions.firstOrNull { it.id == fontId } ?: fontOptions.firstOrNull()
+
     private fun render() {
+        val font = currentFont()
+        val face = font?.typeface ?: Typeface.SERIF
+        binding.themePreview.typeface = face
         binding.themePreview.setTextColor(text)
         binding.themePreview.background = GradientDrawable().apply {
             cornerRadius = dp(14).toFloat()
             setColor(background)
             setStroke(dp(1), 0x33000000)
         }
+        binding.themePreview.text = previewText(font)
         val contrast = ReflowThemes.contrastRatio(background, text)
         binding.contrastWarning.visibility = if (contrast < 3.0) View.VISIBLE else View.GONE
 
@@ -180,6 +273,40 @@ class ReflowThemeSheet(
         }
         textSwatches.forEach { (color, frame) -> paintSwatch(frame, color, color == text) }
         backgroundSwatches.forEach { (color, frame) -> paintSwatch(frame, color, color == background) }
+        fontCards.forEach { (option, card) ->
+            val selected = option.id == fontId
+            card.background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(background)
+                setStroke(
+                    dp(if (selected) 2 else 1),
+                    if (selected) 0xFFF59E0B.toInt() else 0x33000000,
+                )
+            }
+            (card.getChildAt(0) as? TextView)?.setTextColor(text)
+            (card.getChildAt(1) as? TextView)?.setTextColor(text)
+            (card.getChildAt(2) as? TextView)?.setTextColor(withAlpha(text, 0.6f))
+            card.scaleX = if (selected) 1.03f else 1f
+            card.scaleY = if (selected) 1.03f else 1f
+        }
+    }
+
+    /**
+     * Shows a Latin word in italic next to Persian text, so the italic cut (or
+     * synthetic slant) of the selected face is visible before leaving the sheet.
+     */
+    private fun previewText(font: ReflowFontOption?): CharSequence {
+        val plain = "خواندن با این فونت روان‌تر است.\nI want to read this."
+        val start = plain.indexOf("I want")
+        if (start < 0) return plain
+        val styled = SpannableString(plain)
+        styled.setSpan(
+            ReflowItalicSpan(font?.italicTypeface),
+            start,
+            start + "I want".length,
+            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+        )
+        return styled
     }
 
     private fun paintSwatch(frame: FrameLayout, color: Int, selected: Boolean) {
@@ -194,6 +321,9 @@ class ReflowThemeSheet(
         val check = frame.tag as? TextView
         check?.visibility = if (selected) View.VISIBLE else View.GONE
     }
+
+    private fun withAlpha(color: Int, factor: Float): Int =
+        Color.argb((Color.alpha(color) * factor).toInt(), Color.red(color), Color.green(color), Color.blue(color))
 
     private fun colorLabel(color: Int): String =
         String.format("#%06X", 0xFFFFFF and color)

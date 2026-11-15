@@ -54,10 +54,17 @@ class Prefs(context: Context) {
         get() = sp.getInt("reflow_text_color", DEFAULT_REFLOW_TEXT)
         set(value) = sp.edit().putInt("reflow_text_color", value).apply()
 
+    /** "pdf" keeps the file's own face; other ids live in [ir.lexilens.reader.reader.ReflowFonts]. */
+    var reflowFontId: String
+        get() = sp.getString("reflow_font_id", DEFAULT_REFLOW_FONT).orEmpty()
+            .ifBlank { DEFAULT_REFLOW_FONT }
+        set(value) = sp.edit().putString("reflow_font_id", value).apply()
+
     companion object {
         const val MAX_NEW_PER_DAY = 10_000
         const val MAX_REVIEWS_PER_DAY = 100_000
         const val DEFAULT_REFLOW_BACKGROUND = 0xFFF6F4ED.toInt()
         const val DEFAULT_REFLOW_TEXT = 0xFF14231E.toInt()
+        const val DEFAULT_REFLOW_FONT = "pdf"
     }
 }
