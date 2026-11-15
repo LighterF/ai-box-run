@@ -1,0 +1,147 @@
+name: ai
+on:
+  repository_dispatch:
+    types: [telegram]
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - name: Checkout
+        id: co1
+        uses: actions/checkout@v4
+        timeout-minutes: 2
+        continue-on-error: true
+
+      - name: Checkout (retry)
+        if: steps.co1.outcome != 'success'
+        uses: actions/checkout@v4
+        timeout-minutes: 4
+
+      - name: Checkout private memory repo (public repo only)
+        if: vars.DATA_REPO != ''
+        uses: actions/checkout@v4
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          repository: ${{ vars.DATA_REPO }}
+          token: ${{ secrets.DATA_TOKEN }}
+          path: data
+
+      - name: Cache opencode
+        id: ocache
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm-global
+          key: opencode-bin-v1-${{ runner.os }}
+
+      - name: Install opencode (only if not cached)
+        if: steps.ocache.outputs.cache-hit != 'true'
+        timeout-minutes: 10
+        run: |
+          npm config set prefix "$HOME/.npm-global"
+          npm install -g opencode-ai
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Record baseline and restore the checkpoint (only when this run continues a moved task)
+        timeout-minutes: 30
+        env:
+          GH_TOKEN: ${{ vars.DATA_REPO != '' && secrets.DATA_TOKEN || github.token }}
+          CKPT_REPO: ${{ vars.DATA_REPO != '' && vars.DATA_REPO || github.repository }}
+        run: |
+          bash agent/checkpoint.sh baseline
+          TAG=$(jq -r '.client_payload.ckpt // empty' "$GITHUB_EVENT_PATH")
+          [ -z "$TAG" ] || bash agent/checkpoint.sh restore "$TAG" || echo "checkpoint restore failed - continuing with the notes only"
+
+      - name: Agent
+        id: ai
+        timeout-minutes: 350
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          GH_API_TOKEN: ${{ github.token }}
+          MODEL: ${{ vars.OPENCODE_MODEL }}
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          QUIET: ${{ github.event.repository.private == false && '1' || '' }}
+        run: |
+          export PATH="$HOME/.npm-global/bin:$PATH"
+          mkdir -p outputs
+          if [ -d data/.git ]; then mkdir -p data/memory; rm -rf memory; ln -s "$PWD/data/memory" memory; fi
+          python3 agent/run.py
+
+      - name: Checkpoint the whole machine for the fresh one
+        if: always()
+        timeout-minutes: 40
+        env:
+          GH_TOKEN: ${{ vars.DATA_REPO != '' && secrets.DATA_TOKEN || github.token }}
+          CKPT_REPO: ${{ vars.DATA_REPO != '' && vars.DATA_REPO || github.repository }}
+        run: |
+          [ -f /tmp/handoff.json ] || exit 0
+          TAG="handoff-${GITHUB_RUN_ID}-$(jq -r .client_payload.hop /tmp/handoff.json)"
+          if bash agent/checkpoint.sh save "$TAG"; then
+            jq --arg t "$TAG" '.client_payload.ckpt=$t' /tmp/handoff.json > /tmp/h2.json && mv /tmp/h2.json /tmp/handoff.json
+          else
+            echo "checkpoint failed - the fresh machine will only get the notes"
+          fi
+
+      - name: Save changes to repo (private repo only)
+        if: always() && steps.ai.outcome != 'skipped' && github.event.repository.private == true
+        run: |
+          git config user.name "ai-bot"
+          git config user.email "ai-bot@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "ai: run ${{ github.run_number }}"
+          for i in 1 2 3; do git pull --rebase --autostash origin "$GITHUB_REF_NAME" && git push && break || sleep 3; done
+
+      - name: Save memory to the private data repo
+        if: always() && steps.ai.outcome != 'skipped' && vars.DATA_REPO != ''
+        working-directory: data
+        run: |
+          git config user.name "ai-bot"
+          git config user.email "ai-bot@users.noreply.github.com"
+          [ -f .gitignore ] || printf '**/build/\n**/.gradle/\n*.apk\n*.aab\nnode_modules/\n__pycache__/\n*.mp4\n*.zip\n' > .gitignore
+          find . -type f -size +50M -not -path './.git/*' -print -delete
+          git add -A
+          git diff --cached --quiet || git commit -qm "memory: run ${{ github.run_number }}"
+          for i in 1 2 3; do git pull --rebase --autostash -q && git push -q && break || sleep 3; done
+
+      - name: Tell Telegram if the agent crashed before it could report
+        if: failure() && steps.ai.outcome != 'success'
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+        run: |
+          [ -f /tmp/run_started ] && exit 0
+          CHAT=$(jq -r .client_payload.chat_id "$GITHUB_EVENT_PATH"); MID=$(jq -r .client_payload.mid "$GITHUB_EVENT_PATH")
+          curl -s "https://api.telegram.org/bot$TG_TOKEN/editMessageText" \
+            --data-urlencode "chat_id=$CHAT" --data-urlencode "message_id=$MID" \
+            --data-urlencode "text=❌ برنامه روی ماشین موقت اجرا نشد (خطا در آماده‌سازی یا کد). دوباره بفرستید." > /dev/null
+
+      - name: Continue on a fresh machine (new IP) after a persistent rate limit
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+        run: |
+          [ -f /tmp/handoff.json ] || exit 0
+          if ! curl -sf -X POST -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+               "https://api.github.com/repos/$GITHUB_REPOSITORY/dispatches" -d @/tmp/handoff.json; then
+            CHAT=$(jq -r .client_payload.chat_id /tmp/handoff.json); MID=$(jq -r .client_payload.mid /tmp/handoff.json)
+            curl -s "https://api.telegram.org/bot$TG_TOKEN/editMessageText" \
+              --data-urlencode "chat_id=$CHAT" --data-urlencode "message_id=$MID" \
+              --data-urlencode "text=❌ انتقال خودکار به ماشین جدید ناموفق بود. پیام را دوباره بفرستید." > /dev/null
+          fi
+
+      - name: Delete the checkpoint this run consumed
+        if: always()
+        env:
+          GH_TOKEN: ${{ vars.DATA_REPO != '' && secrets.DATA_TOKEN || github.token }}
+          CKPT_REPO: ${{ vars.DATA_REPO != '' && vars.DATA_REPO || github.repository }}
+        run: |
+          TAG=$(jq -r '.client_payload.ckpt // empty' "$GITHUB_EVENT_PATH")
+          [ -z "$TAG" ] || bash agent/checkpoint.sh cleanup "$TAG" || true
