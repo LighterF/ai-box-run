@@ -53,17 +53,10 @@ class ReaderReflowActivityTest {
                 assertEquals(View.VISIBLE, activity.findViewById<View>(R.id.palette_button).visibility)
                 assertFalse("reflow should contain the PDF text", reflow.content.isEmpty)
                 val before = reflow.textSizePercent
-                activity.findViewById<View>(R.id.text_larger).performClick()
-                assertTrue("A+ should enlarge the text", reflow.textSizePercent > before)
-
-                val decor = activity.window.decorView
-                assertTrue(decor.width > 0 && decor.height > 0)
-                val bitmap = Bitmap.createBitmap(decor.width, decor.height, Bitmap.Config.ARGB_8888)
-                decor.draw(Canvas(bitmap))
-                File(context.filesDir, "reflow_activity.png").outputStream().use {
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
-                }
-                bitmap.recycle()
+                saveDecor(activity, "reflow_size_100.png")
+                repeat(5) { activity.findViewById<View>(R.id.text_larger).performClick() }
+                assertTrue("A+ should enlarge the text", reflow.textSizePercent >= before + 50)
+                saveDecor(activity, "reflow_activity.png")
             }
             scenario.onActivity { activity ->
                 activity.findViewById<ImageButton>(R.id.palette_button).performClick()
@@ -85,6 +78,7 @@ class ReaderReflowActivityTest {
             }
             screen.recycle()
             assertTrue(File(context.filesDir, "reflow_activity.png").length() > 10_000)
+            assertTrue(File(context.filesDir, "reflow_size_100.png").length() > 10_000)
             assertTrue(File(context.filesDir, "reflow_theme_sheet.png").length() > 10_000)
 
             var presetFound = false
@@ -123,6 +117,17 @@ class ReaderReflowActivityTest {
                 reflowTextColor = ReflowThemes.default.text
             }
         }
+    }
+
+    private fun saveDecor(activity: ReaderActivity, name: String) {
+        val decor = activity.window.decorView
+        assertTrue(decor.width > 0 && decor.height > 0)
+        val bitmap = Bitmap.createBitmap(decor.width, decor.height, Bitmap.Config.ARGB_8888)
+        decor.draw(Canvas(bitmap))
+        File(activity.filesDir, name).outputStream().use {
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
+        }
+        bitmap.recycle()
     }
 
     private fun findViewByDescription(view: View, description: String): View? {

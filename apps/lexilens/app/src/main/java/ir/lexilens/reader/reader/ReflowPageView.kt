@@ -304,6 +304,7 @@ class ReflowPageView @JvmOverloads constructor(
         buildWordHits()
         lastWidth = width
         lastHeight = height
+        invalidate()
     }
 
     /**

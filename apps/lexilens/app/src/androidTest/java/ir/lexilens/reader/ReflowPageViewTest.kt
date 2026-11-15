@@ -61,6 +61,26 @@ class ReflowPageViewTest {
     }
 
     @Test
+    fun changingTextSizeOnTheSameViewRequestsARedraw() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val view = ReflowPageView(context).apply {
+            setChromeVisible(false)
+            pageBackground = Color.WHITE
+            pageTextColor = Color.BLACK
+            textSizePercent = 100
+            setContent(ReflowText.build(samplePage()))
+        }
+        layout(view)
+        draw(view).recycle()
+        assertFalse("a just-drawn view should not be dirty", view.isDirty)
+
+        view.textSizePercent = 140
+
+        assertTrue("changing the text size must schedule a new frame", view.isDirty)
+        assertEquals(140, view.textSizePercent)
+    }
+
+    @Test
     fun textSizeChangesTheAmountOfSpaceUsed() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val content = ReflowText.build(samplePage())
