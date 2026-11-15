@@ -1,0 +1,641 @@
+package ir.lexilens.reader.reader
+
+import android.graphics.Bitmap
+import android.net.Uri
+import android.os.Bundle
+import android.view.View
+import android.view.WindowManager
+import android.widget.SeekBar
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.snackbar.Snackbar
+import ir.lexilens.reader.App
+import ir.lexilens.reader.R
+import ir.lexilens.reader.data.Card
+import ir.lexilens.reader.data.CardComposer
+import ir.lexilens.reader.data.DictionaryEntry
+import ir.lexilens.reader.data.Document
+import ir.lexilens.reader.data.Prefs
+import ir.lexilens.reader.databinding.ActivityReaderBinding
+import ir.lexilens.reader.pdf.PageRenderer
+import ir.lexilens.reader.pdf.PageText
+import ir.lexilens.reader.pdf.PdfFontFace
+import ir.lexilens.reader.pdf.PdfFonts
+import ir.lexilens.reader.pdf.PdfTextExtractor
+import ir.lexilens.reader.pdf.ReflowText
+import ir.lexilens.reader.pdf.WordBox
+import ir.lexilens.reader.util.TextUtils
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+
+class ReaderActivity : AppCompatActivity() {
+
+    private lateinit var binding: ActivityReaderBinding
+    private lateinit var app: App
+    private lateinit var prefs: Prefs
+    private var doc: Document? = null
+    private var renderer: PageRenderer? = null
+    private var textExtractor: PdfTextExtractor? = null
+    private var pageText: PageText? = null
+    private var pageTextPage = -1
+    private var currentWord: WordBox? = null
+    private var currentWordPage = -1
+    private var activeSheet: WordLookupSheet? = null
+    private val rendering = mutableSetOf<Int>()
+    private val pendingWidths = HashMap<Int, Int>()
+    private var textJob: Job? = null
+    private var barsVisible = true
+    private var seekGuard = false
+    private var textSizeGuard = false
+    private var reflowEnabled = false
+    private var themeSheet: ReflowThemeSheet? = null
+    private var pdfFace: PdfFontFace = PdfFontFace.NONE
+
+    private val importFontLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) importFont(uri)
+        }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        app = application as App
+        prefs = Prefs(this)
+        binding = ActivityReaderBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
+        val docId = intent.getLongExtra(EXTRA_DOC_ID, 0L)
+        if (docId <= 0L) {
+            finish()
+            return
+        }
+        val loaded = app.db.document(docId)
+        if (loaded == null || !File(loaded.path).exists()) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("کتاب پیدا نشد")
+                .setMessage("فایل این کتاب در دسترس نیست.")
+                .setPositiveButton("باشه") { _, _ -> finish() }
+                .setCancelable(false)
+                .show()
+            return
+        }
+        doc = loaded
+        if (prefs.keepScreenOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        binding.docTitle.text = loaded.title
+        binding.pageView.fitWidth = prefs.fitWidth
+
+        try {
+            val file = File(loaded.path)
+            renderer = PageRenderer(file)
+            textExtractor = PdfTextExtractor(this, loaded.id, file)
+        } catch (e: Exception) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("PDF باز نشد")
+                .setMessage(e.message ?: "فایل ممکن است رمزدار یا خراب باشد.")
+                .setPositiveButton("باشه") { _, _ -> finish() }
+                .setCancelable(false)
+                .show()
+            return
+        }
+
+        val pageCount = renderer?.pageCount ?: 0
+        binding.pageSeek.max = (pageCount - 1).coerceAtLeast(1)
+        binding.pageView.listener = object : PdfPageView.Listener {
+            override fun onPageChanged(index: Int) {
+                updatePageUi(index)
+                if (reflowEnabled) binding.reflowView.showLoading()
+                prefetchText(index)
+            }
+
+            override fun onNeedPage(index: Int, targetWidth: Int) = requestPage(index, targetWidth)
+            override fun onLongPressPage(index: Int, nx: Float, ny: Float, viewX: Float, viewY: Float) {
+                handleLongPress(nx, ny)
+            }
+            override fun onTap() = toggleBars()
+            override fun onZoomChanged(zoomed: Boolean) {
+                if (zoomed && barsVisible) toggleBars()
+            }
+
+            override fun onNeedTile(
+                index: Int,
+                pageLeft: Float,
+                pageTop: Float,
+                pageRight: Float,
+                pageBottom: Float,
+                outWidth: Int,
+                outHeight: Int,
+                token: Int,
+            ) {
+                val r = renderer ?: return
+                lifecycleScope.launch {
+                    val bmp = withContext(Dispatchers.IO) {
+                        runCatching {
+                            r.renderRegion(
+                                index,
+                                pageLeft,
+                                pageTop,
+                                pageRight,
+                                pageBottom,
+                                outWidth,
+                                outHeight,
+                            )
+                        }.getOrNull()
+                    }
+                    if (isFinishing || isDestroyed) {
+                        bmp?.recycle()
+                        return@launch
+                    }
+                    if (bmp != null) {
+                        binding.pageView.setPageTile(
+                            index,
+                            token,
+                            pageLeft,
+                            pageTop,
+                            pageRight,
+                            pageBottom,
+                            bmp,
+                        )
+                    } else {
+                        binding.pageView.tileFailed(index, token)
+                    }
+                }
+            }
+        }
+        binding.pageView.setDocument(renderer!!, pageCount, loaded.lastPage)
+        setupReflow()
+        reflowEnabled = prefs.reflowEnabled
+        applyMode()
+        loadPdfFont(File(loaded.path))
+        updatePageUi(binding.pageView.pageIndex)
+        prefetchText(binding.pageView.pageIndex)
+
+        binding.backButton.setOnClickListener { finish() }
+        binding.fitButton.setOnClickListener {
+            if (reflowEnabled) return@setOnClickListener
+            prefs.fitWidth = !prefs.fitWidth
+            binding.pageView.fitWidth = prefs.fitWidth
+            Snackbar.make(
+                binding.root,
+                if (prefs.fitWidth) "عرض کامل" else "تمام صفحه",
+                Snackbar.LENGTH_SHORT
+            ).show()
+        }
+        binding.prevButton.setOnClickListener {
+            binding.pageView.goToPage(binding.pageView.pageIndex - 1)
+        }
+        binding.nextButton.setOnClickListener {
+            binding.pageView.goToPage(binding.pageView.pageIndex + 1)
+        }
+        binding.pageSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser && !seekGuard) {
+                    binding.pageView.goToPage(progress)
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            binding.topBar.setPadding(binding.topBar.paddingLeft, bars.top + dp(6), binding.topBar.paddingRight, dp(6))
+            binding.bottomBar.setPadding(binding.bottomBar.paddingLeft, dp(6), binding.bottomBar.paddingRight, bars.bottom + dp(10))
+            insets
+        }
+    }
+
+    private fun updatePageUi(index: Int) {
+        val count = renderer?.pageCount ?: 0
+        binding.pageCounter.text = "صفحهٔ ${TextUtils.faNumber(index + 1)} از ${TextUtils.faNumber(count)}"
+        seekGuard = true
+        binding.pageSeek.progress = index
+        seekGuard = false
+        binding.prevButton.alpha = if (index > 0) 1f else 0.35f
+        binding.nextButton.alpha = if (index < count - 1) 1f else 0.35f
+        doc?.let { app.db.updateLastPage(it.id, index) }
+    }
+
+    private fun requestPage(index: Int, targetWidth: Int) {
+        val r = renderer ?: return
+        if (index !in 0 until r.pageCount) return
+        val target = targetWidth.coerceIn(200, 5000)
+        if (!rendering.contains(index) && target <= binding.pageView.bitmapWidth(index)) return
+        if (target > (pendingWidths[index] ?: 0)) pendingWidths[index] = target
+        if (rendering.contains(index)) return
+        rendering.add(index)
+        lifecycleScope.launch {
+            while (!isFinishing && !isDestroyed) {
+                val want = pendingWidths[index] ?: 0
+                if (want <= 0) break
+                pendingWidths[index] = 0
+                val bmp: Bitmap? = withContext(Dispatchers.IO) {
+                    runCatching { r.renderFresh(index, want) }.getOrNull()
+                }
+                if (bmp != null && !isFinishing && !isDestroyed) {
+                    binding.pageView.setPageBitmap(index, bmp)
+                } else if (bmp != null) {
+                    bmp.recycle()
+                }
+                val next = pendingWidths[index] ?: 0
+                if (next <= binding.pageView.bitmapWidth(index)) break
+            }
+            rendering.remove(index)
+        }
+    }
+
+    private fun prefetchText(index: Int) {
+        textJob?.cancel()
+        pageText = null
+        pageTextPage = -1
+        textJob = lifecycleScope.launch {
+            val own = withContext(Dispatchers.IO) { textExtractor?.extract(index) }
+            if (own != null && binding.pageView.pageIndex == index) {
+                pageText = own
+                pageTextPage = index
+                if (reflowEnabled) {
+                    if (own.isEmpty) binding.reflowView.showUnavailable()
+                    else binding.reflowView.setContent(ReflowText.build(own))
+                }
+            }
+            withContext(Dispatchers.IO) {
+                listOf(index - 1, index + 1).filter { it >= 0 }.forEach { textExtractor?.extract(it) }
+            }
+        }
+    }
+
+    private fun handleLongPress(nx: Float, ny: Float) {
+        val page = binding.pageView.pageIndex
+        val text = pageText?.takeIf { pageTextPage == page }
+        if (text != null) {
+            performHit(text, nx, ny)
+            return
+        }
+        val snack = Snackbar.make(binding.root, "در حال آماده‌سازی متن صفحه…", Snackbar.LENGTH_INDEFINITE)
+        snack.show()
+        lifecycleScope.launch {
+            val loaded = withContext(Dispatchers.IO) { textExtractor?.extract(page) }
+            snack.dismiss()
+            if (loaded == null || loaded.words.isEmpty()) {
+                Snackbar.make(
+                    binding.root,
+                    "این صفحه متن قابل انتخاب ندارد؛ شاید PDF اسکن‌شده است.",
+                    Snackbar.LENGTH_LONG
+                ).show()
+                return@launch
+            }
+            pageText = loaded
+            pageTextPage = page
+            performHit(loaded, nx, ny)
+        }
+    }
+
+    private fun performHit(text: PageText, nx: Float, ny: Float) {
+        val (px, py) = text.mapFromPage(nx, ny)
+        val hit = text.hit(px, py)
+        if (hit == null) {
+            Snackbar.make(binding.root, "واژه‌ای پیدا نشد؛ دقیق‌تر روی کلمه نگه دار.", Snackbar.LENGTH_SHORT).show()
+            return
+        }
+        openWordSheet(text, hit.first)
+    }
+
+    private fun openWordSheet(text: PageText, word: WordBox) {
+        currentWord = word
+        currentWordPage = binding.pageView.pageIndex
+        val sheet = WordLookupSheet(
+            context = this,
+            app = app,
+            scope = lifecycleScope,
+            pageText = text,
+            wordBox = word,
+            docId = doc?.id ?: 0L,
+            pageIndex = currentWordPage,
+            onAdd = { translation, entry, existing ->
+                addCard(word, text, translation, entry, existing)
+            },
+        )
+        activeSheet = sheet
+        sheet.show()
+    }
+
+    private fun addCard(
+        word: WordBox,
+        text: PageText,
+        translation: String,
+        entry: DictionaryEntry?,
+        existing: Card?,
+    ) {
+        val sheet = activeSheet
+        if (existing != null) {
+            val updated = existing.copy(translation = translation.trim())
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) {
+                    runCatching { app.db.updateCard(updated) }
+                }
+                sheet?.dismiss()
+                Snackbar.make(
+                    binding.root,
+                    "معنی «${word.text}» به‌روز شد",
+                    Snackbar.LENGTH_LONG,
+                ).show()
+            }
+            return
+        }
+        val d = doc ?: return
+        val r = renderer ?: return
+        val page = binding.pageView.pageIndex
+        lifecycleScope.launch {
+            val built = withContext(Dispatchers.IO) {
+                runCatching {
+                    val card = CardComposer.build(
+                        context = this@ReaderActivity,
+                        app = app,
+                        doc = d,
+                        pageText = text,
+                        pageIndex = page,
+                        word = word,
+                        entry = entry,
+                        translationOverride = translation,
+                        renderer = r,
+                        ttsRate = prefs.ttsRate,
+                    )
+                    val audio = CardComposer.synthesizeAudio(app, card, prefs.ttsRate)
+                    card.copy(audioPath = audio)
+                }.getOrNull()
+            }
+            if (built == null) {
+                sheet?.dismiss()
+                Snackbar.make(binding.root, "ساخت کارت نشد؛ دوباره تلاش کن.", Snackbar.LENGTH_LONG).show()
+                return@launch
+            }
+            val id = withContext(Dispatchers.IO) { app.db.insertCard(built) }
+            sheet?.dismiss()
+            if (id == -1L) {
+                Snackbar.make(binding.root, "این واژه از قبل برای همین خط اضافه شده.", Snackbar.LENGTH_LONG).show()
+            } else {
+                Snackbar.make(
+                    binding.root,
+                    "«${word.text}» به مرور اضافه شد",
+                    Snackbar.LENGTH_LONG
+                ).setAction("دیدن کارت‌ها") {
+                    startActivity(android.content.Intent(this@ReaderActivity, ir.lexilens.reader.ui.MainActivity::class.java))
+                }.show()
+            }
+        }
+    }
+
+    private fun setupReflow() {
+        binding.reflowView.listener = object : ReflowPageView.Listener {
+            override fun onWordLongPress(wordIndex: Int, viewX: Float, viewY: Float) {
+                val page = binding.pageView.pageIndex
+                val text = pageText?.takeIf { pageTextPage == page }
+                if (text == null) {
+                    Snackbar.make(binding.root, "متن این صفحه هنوز آماده نشده.", Snackbar.LENGTH_SHORT).show()
+                    return
+                }
+                val word = text.words.getOrNull(wordIndex) ?: return
+                openWordSheet(text, word)
+            }
+
+            override fun onLongPressMiss() {
+                Snackbar.make(binding.root, "واژه‌ای پیدا نشد؛ دقیق‌تر روی کلمه نگه دار.", Snackbar.LENGTH_SHORT).show()
+            }
+
+            override fun onTap() = toggleBars()
+        }
+        binding.reflowView.textSizePercent = prefs.reflowTextPercent
+        binding.reflowView.pageBackground = prefs.reflowBackground
+        binding.reflowView.pageTextColor = prefs.reflowTextColor
+        applyReflowFont()
+        setTextSizeControls(prefs.reflowTextPercent)
+
+        binding.reflowButton.setOnClickListener { toggleReflow() }
+        binding.paletteButton.setOnClickListener { openThemeSheet() }
+        binding.textSizeSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser || textSizeGuard) return
+                setReflowTextPercent(ReflowPageView.MIN_TEXT_PERCENT + progress)
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+        binding.textSmaller.setOnClickListener {
+            setReflowTextPercent(binding.reflowView.textSizePercent - 10)
+        }
+        binding.textLarger.setOnClickListener {
+            setReflowTextPercent(binding.reflowView.textSizePercent + 10)
+        }
+    }
+
+    private fun toggleReflow() {
+        reflowEnabled = !reflowEnabled
+        prefs.reflowEnabled = reflowEnabled
+        applyMode()
+    }
+
+    private fun applyMode() {
+        binding.pageView.visibility = if (reflowEnabled) View.GONE else View.VISIBLE
+        binding.reflowView.visibility = if (reflowEnabled) View.VISIBLE else View.GONE
+        binding.reflowView.setChromeVisible(barsVisible)
+        binding.paletteButton.visibility = if (reflowEnabled) View.VISIBLE else View.GONE
+        binding.reflowControls.visibility = if (reflowEnabled) View.VISIBLE else View.GONE
+        binding.fitButton.alpha = if (reflowEnabled) 0.3f else 1f
+        binding.reflowButton.alpha = if (reflowEnabled) 1f else 0.75f
+        binding.reflowButton.imageTintList = android.content.res.ColorStateList.valueOf(
+            androidx.core.content.ContextCompat.getColor(
+                this,
+                if (reflowEnabled) R.color.amber else R.color.white,
+            )
+        )
+        binding.reflowButton.contentDescription =
+            if (reflowEnabled) "بازچینش متن (روشن)" else "بازچینش متن"
+        if (reflowEnabled) {
+            binding.reflowView.pageBackground = prefs.reflowBackground
+            binding.reflowView.pageTextColor = prefs.reflowTextColor
+            binding.reflowView.textSizePercent = prefs.reflowTextPercent
+            applyReflowFont()
+            setTextSizeControls(prefs.reflowTextPercent)
+            val page = binding.pageView.pageIndex
+            val text = pageText?.takeIf { pageTextPage == page }
+            if (text == null) {
+                binding.reflowView.showLoading()
+                prefetchText(page)
+            } else if (text.isEmpty) {
+                binding.reflowView.showUnavailable()
+            } else {
+                binding.reflowView.setContent(ReflowText.build(text))
+            }
+        } else {
+            binding.reflowView.setContent(ir.lexilens.reader.pdf.ReflowContent.EMPTY)
+        }
+        updateSystemBarIcons()
+    }
+
+    private fun setReflowTextPercent(value: Int) {
+        val clamped = value.coerceIn(ReflowPageView.MIN_TEXT_PERCENT, ReflowPageView.MAX_TEXT_PERCENT)
+        binding.reflowView.textSizePercent = clamped
+        prefs.reflowTextPercent = clamped
+        setTextSizeControls(clamped)
+    }
+
+    private fun setTextSizeControls(percent: Int) {
+        textSizeGuard = true
+        binding.textSizeSeek.progress = percent - ReflowPageView.MIN_TEXT_PERCENT
+        textSizeGuard = false
+        binding.textSizeLabel.text = "٪${TextUtils.faNumber(percent)}"
+    }
+
+    private fun openThemeSheet() {
+        themeSheet?.dismiss()
+        themeSheet = ReflowThemeSheet(
+            context = this,
+            background = prefs.reflowBackground,
+            text = prefs.reflowTextColor,
+            fontId = prefs.reflowFontId,
+            fontOptions = ReflowFonts.options(this, pdfFace),
+            onColorsChange = { background, text ->
+                prefs.reflowBackground = background
+                prefs.reflowTextColor = text
+                binding.reflowView.pageBackground = background
+                binding.reflowView.pageTextColor = text
+                updateSystemBarIcons()
+            },
+            onFontChange = { id ->
+                prefs.reflowFontId = id
+                applyReflowFont()
+            },
+            onImportFont = {
+                importFontLauncher.launch(
+                    arrayOf(
+                        "font/ttf",
+                        "font/otf",
+                        "font/collection",
+                        "application/font-sfnt",
+                        "application/x-font-ttf",
+                        "application/x-font-truetype",
+                        "application/x-font-opentype",
+                        "application/vnd.ms-opentype",
+                        "application/ttf",
+                        "application/otf",
+                        "application/octet-stream",
+                    ),
+                )
+            },
+            onDeleteFont = { id -> deleteImportedFont(id) },
+        )
+        themeSheet?.show()
+    }
+
+    // ------------------------------------------------------------------ fonts
+
+    private fun loadPdfFont(file: File) {
+        val id = doc?.id ?: return
+        lifecycleScope.launch {
+            val face = withContext(Dispatchers.IO) {
+                runCatching { PdfFonts.load(this@ReaderActivity, id, file) }.getOrDefault(PdfFontFace.NONE)
+            }
+            if (isFinishing || isDestroyed) return@launch
+            pdfFace = face
+            applyReflowFont()
+            refreshThemeFonts()
+        }
+    }
+
+    private fun applyReflowFont() {
+        val option = ReflowFonts.resolve(this, prefs.reflowFontId, pdfFace)
+        if (option.id != prefs.reflowFontId) prefs.reflowFontId = option.id
+        binding.reflowView.textTypeface = option.typeface
+        binding.reflowView.italicTypeface = option.italicTypeface
+    }
+
+    private fun refreshThemeFonts() {
+        themeSheet?.updateFonts(
+            ReflowFonts.options(this, pdfFace),
+            prefs.reflowFontId,
+        )
+    }
+
+    private fun importFont(uri: Uri) {
+        val snack = Snackbar.make(binding.root, "در حال افزودن فونت…", Snackbar.LENGTH_INDEFINITE)
+        snack.show()
+        lifecycleScope.launch {
+            val option = withContext(Dispatchers.IO) {
+                runCatching { ReflowFonts.importFrom(this@ReaderActivity, uri) }.getOrNull()
+            }
+            snack.dismiss()
+            if (isFinishing || isDestroyed) return@launch
+            if (option == null) {
+                Snackbar.make(
+                    binding.root,
+                    "این فایل به‌عنوان فونت خوانده نشد؛ یک فایل TTF یا OTF انتخاب کن.",
+                    Snackbar.LENGTH_LONG,
+                ).show()
+                return@launch
+            }
+            prefs.reflowFontId = option.id
+            applyReflowFont()
+            refreshThemeFonts()
+            Snackbar.make(binding.root, "فونت «${option.label}» اضافه و انتخاب شد", Snackbar.LENGTH_LONG).show()
+        }
+    }
+
+    private fun deleteImportedFont(id: String) {
+        if (!ReflowFonts.deleteImported(this, id)) return
+        if (prefs.reflowFontId == id) prefs.reflowFontId = ReflowFonts.ID_PDF
+        applyReflowFont()
+        refreshThemeFonts()
+        Snackbar.make(binding.root, "فونت حذف شد", Snackbar.LENGTH_SHORT).show()
+    }
+
+    private fun updateSystemBarIcons() {
+        val darkIcons = reflowEnabled && !barsVisible &&
+            ReflowThemes.isLight(prefs.reflowBackground)
+        val controller = WindowInsetsControllerCompat(window, binding.root)
+        controller.isAppearanceLightStatusBars = darkIcons
+        controller.isAppearanceLightNavigationBars = darkIcons
+    }
+
+    private fun toggleBars() {
+        barsVisible = !barsVisible
+        binding.reflowView.setChromeVisible(barsVisible)
+        if (barsVisible) {
+            binding.topBar.animate().translationY(0f).alpha(1f).setDuration(180).start()
+            binding.bottomBar.animate().translationY(0f).alpha(1f).setDuration(180).start()
+        } else {
+            binding.topBar.animate().translationY(-binding.topBar.height.toFloat()).alpha(0f).setDuration(180).start()
+            binding.bottomBar.animate().translationY(binding.bottomBar.height.toFloat()).alpha(0f).setDuration(180).start()
+        }
+        updateSystemBarIcons()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        doc?.let { app.db.updateLastPage(it.id, binding.pageView.pageIndex) }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        activeSheet?.dismiss()
+        themeSheet?.dismiss()
+        textJob?.cancel()
+        runCatching { textExtractor?.close() }
+        runCatching { renderer?.close() }
+        binding.pageView.release()
+        textExtractor = null
+        renderer = null
+    }
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    companion object {
+        const val EXTRA_DOC_ID = "doc_id"
+    }
+}

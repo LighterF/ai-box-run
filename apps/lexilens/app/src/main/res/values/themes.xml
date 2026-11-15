@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.LexiLens" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/teal</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorPrimaryContainer">@color/teal_light</item>
+        <item name="colorOnPrimaryContainer">@color/teal_dark</item>
+        <item name="colorSecondary">@color/amber</item>
+        <item name="colorOnSecondary">@color/ink</item>
+        <item name="colorSecondaryContainer">@color/amber_soft</item>
+        <item name="colorOnSecondaryContainer">@color/ink</item>
+        <item name="colorSurface">@color/paper_card</item>
+        <item name="colorOnSurface">@color/ink</item>
+        <item name="colorSurfaceVariant">@color/paper</item>
+        <item name="colorOnSurfaceVariant">@color/muted</item>
+        <item name="colorOutline">@color/line</item>
+        <item name="colorError">@color/rose</item>
+        <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/paper_card</item>
+        <item name="android:windowBackground">@color/paper</item>
+        <item name="android:fontFamily">@font/vazirmatn</item>
+        <item name="fontFamily">@font/vazirmatn</item>
+    </style>
+
+    <style name="Theme.LexiLens.Dark" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#5EEAD4</item>
+        <item name="colorOnPrimary">#062A28</item>
+        <item name="colorPrimaryContainer">#134E4A</item>
+        <item name="colorOnPrimaryContainer">#CCFBF1</item>
+        <item name="colorSecondary">#FBBF24</item>
+        <item name="colorOnSecondary">#2A1A00</item>
+        <item name="colorSurface">@color/ink_soft</item>
+        <item name="colorOnSurface">#E7F0EC</item>
+        <item name="colorSurfaceVariant">@color/ink</item>
+        <item name="colorOnSurfaceVariant">#9FB4AD</item>
+        <item name="colorOutline">#2C3B36</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@color/ink_soft</item>
+        <item name="android:windowBackground">@color/ink</item>
+    </style>
+</resources>
