@@ -8,6 +8,7 @@ import android.widget.SeekBar
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
@@ -22,6 +23,7 @@ import ir.lexilens.reader.databinding.ActivityReaderBinding
 import ir.lexilens.reader.pdf.PageRenderer
 import ir.lexilens.reader.pdf.PageText
 import ir.lexilens.reader.pdf.PdfTextExtractor
+import ir.lexilens.reader.pdf.ReflowText
 import ir.lexilens.reader.pdf.WordBox
 import ir.lexilens.reader.util.TextUtils
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +50,9 @@ class ReaderActivity : AppCompatActivity() {
     private var textJob: Job? = null
     private var barsVisible = true
     private var seekGuard = false
+    private var textSizeGuard = false
+    private var reflowEnabled = false
+    private var themeSheet: ReflowThemeSheet? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -95,6 +100,7 @@ class ReaderActivity : AppCompatActivity() {
         binding.pageView.listener = object : PdfPageView.Listener {
             override fun onPageChanged(index: Int) {
                 updatePageUi(index)
+                if (reflowEnabled) binding.reflowView.showLoading()
                 prefetchText(index)
             }
 
@@ -153,11 +159,15 @@ class ReaderActivity : AppCompatActivity() {
             }
         }
         binding.pageView.setDocument(renderer!!, pageCount, loaded.lastPage)
+        setupReflow()
+        reflowEnabled = prefs.reflowEnabled
+        applyMode()
         updatePageUi(binding.pageView.pageIndex)
         prefetchText(binding.pageView.pageIndex)
 
         binding.backButton.setOnClickListener { finish() }
         binding.fitButton.setOnClickListener {
+            if (reflowEnabled) return@setOnClickListener
             prefs.fitWidth = !prefs.fitWidth
             binding.pageView.fitWidth = prefs.fitWidth
             Snackbar.make(
@@ -238,6 +248,10 @@ class ReaderActivity : AppCompatActivity() {
             if (own != null && binding.pageView.pageIndex == index) {
                 pageText = own
                 pageTextPage = index
+                if (reflowEnabled) {
+                    if (own.isEmpty) binding.reflowView.showUnavailable()
+                    else binding.reflowView.setContent(ReflowText.build(own))
+                }
             }
             withContext(Dispatchers.IO) {
                 listOf(index - 1, index + 1).filter { it >= 0 }.forEach { textExtractor?.extract(it) }
@@ -278,18 +292,22 @@ class ReaderActivity : AppCompatActivity() {
             Snackbar.make(binding.root, "واژه‌ای پیدا نشد؛ دقیق‌تر روی کلمه نگه دار.", Snackbar.LENGTH_SHORT).show()
             return
         }
-        currentWord = hit.first
+        openWordSheet(text, hit.first)
+    }
+
+    private fun openWordSheet(text: PageText, word: WordBox) {
+        currentWord = word
         currentWordPage = binding.pageView.pageIndex
         val sheet = WordLookupSheet(
             context = this,
             app = app,
             scope = lifecycleScope,
             pageText = text,
-            wordBox = hit.first,
+            wordBox = word,
             docId = doc?.id ?: 0L,
             pageIndex = currentWordPage,
             onAdd = { translation, entry, existing ->
-                addCard(hit.first, text, translation, entry, existing)
+                addCard(word, text, translation, entry, existing)
             },
         )
         activeSheet = sheet
@@ -362,8 +380,133 @@ class ReaderActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupReflow() {
+        binding.reflowView.listener = object : ReflowPageView.Listener {
+            override fun onWordLongPress(wordIndex: Int, viewX: Float, viewY: Float) {
+                val page = binding.pageView.pageIndex
+                val text = pageText?.takeIf { pageTextPage == page }
+                if (text == null) {
+                    Snackbar.make(binding.root, "متن این صفحه هنوز آماده نشده.", Snackbar.LENGTH_SHORT).show()
+                    return
+                }
+                val word = text.words.getOrNull(wordIndex) ?: return
+                openWordSheet(text, word)
+            }
+
+            override fun onLongPressMiss() {
+                Snackbar.make(binding.root, "واژه‌ای پیدا نشد؛ دقیق‌تر روی کلمه نگه دار.", Snackbar.LENGTH_SHORT).show()
+            }
+
+            override fun onTap() = toggleBars()
+        }
+        binding.reflowView.textSizePercent = prefs.reflowTextPercent
+        binding.reflowView.pageBackground = prefs.reflowBackground
+        binding.reflowView.pageTextColor = prefs.reflowTextColor
+        setTextSizeControls(prefs.reflowTextPercent)
+
+        binding.reflowButton.setOnClickListener { toggleReflow() }
+        binding.paletteButton.setOnClickListener { openThemeSheet() }
+        binding.textSizeSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser || textSizeGuard) return
+                setReflowTextPercent(ReflowPageView.MIN_TEXT_PERCENT + progress)
+            }
+
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+        binding.textSmaller.setOnClickListener {
+            setReflowTextPercent(binding.reflowView.textSizePercent - 10)
+        }
+        binding.textLarger.setOnClickListener {
+            setReflowTextPercent(binding.reflowView.textSizePercent + 10)
+        }
+    }
+
+    private fun toggleReflow() {
+        reflowEnabled = !reflowEnabled
+        prefs.reflowEnabled = reflowEnabled
+        applyMode()
+    }
+
+    private fun applyMode() {
+        binding.pageView.visibility = if (reflowEnabled) View.GONE else View.VISIBLE
+        binding.reflowView.visibility = if (reflowEnabled) View.VISIBLE else View.GONE
+        binding.reflowView.setChromeVisible(barsVisible)
+        binding.paletteButton.visibility = if (reflowEnabled) View.VISIBLE else View.GONE
+        binding.reflowControls.visibility = if (reflowEnabled) View.VISIBLE else View.GONE
+        binding.fitButton.alpha = if (reflowEnabled) 0.3f else 1f
+        binding.reflowButton.alpha = if (reflowEnabled) 1f else 0.75f
+        binding.reflowButton.imageTintList = android.content.res.ColorStateList.valueOf(
+            androidx.core.content.ContextCompat.getColor(
+                this,
+                if (reflowEnabled) R.color.amber else R.color.white,
+            )
+        )
+        binding.reflowButton.contentDescription =
+            if (reflowEnabled) "بازچینش متن (روشن)" else "بازچینش متن"
+        if (reflowEnabled) {
+            binding.reflowView.pageBackground = prefs.reflowBackground
+            binding.reflowView.pageTextColor = prefs.reflowTextColor
+            binding.reflowView.textSizePercent = prefs.reflowTextPercent
+            setTextSizeControls(prefs.reflowTextPercent)
+            val page = binding.pageView.pageIndex
+            val text = pageText?.takeIf { pageTextPage == page }
+            if (text == null) {
+                binding.reflowView.showLoading()
+                prefetchText(page)
+            } else if (text.isEmpty) {
+                binding.reflowView.showUnavailable()
+            } else {
+                binding.reflowView.setContent(ReflowText.build(text))
+            }
+        } else {
+            binding.reflowView.setContent(ir.lexilens.reader.pdf.ReflowContent.EMPTY)
+        }
+        updateSystemBarIcons()
+    }
+
+    private fun setReflowTextPercent(value: Int) {
+        val clamped = value.coerceIn(ReflowPageView.MIN_TEXT_PERCENT, ReflowPageView.MAX_TEXT_PERCENT)
+        binding.reflowView.textSizePercent = clamped
+        prefs.reflowTextPercent = clamped
+        setTextSizeControls(clamped)
+    }
+
+    private fun setTextSizeControls(percent: Int) {
+        textSizeGuard = true
+        binding.textSizeSeek.progress = percent - ReflowPageView.MIN_TEXT_PERCENT
+        textSizeGuard = false
+        binding.textSizeLabel.text = "٪${TextUtils.faNumber(percent)}"
+    }
+
+    private fun openThemeSheet() {
+        themeSheet?.dismiss()
+        themeSheet = ReflowThemeSheet(
+            context = this,
+            background = prefs.reflowBackground,
+            text = prefs.reflowTextColor,
+        ) { background, text ->
+            prefs.reflowBackground = background
+            prefs.reflowTextColor = text
+            binding.reflowView.pageBackground = background
+            binding.reflowView.pageTextColor = text
+            updateSystemBarIcons()
+        }
+        themeSheet?.show()
+    }
+
+    private fun updateSystemBarIcons() {
+        val darkIcons = reflowEnabled && !barsVisible &&
+            ReflowThemes.isLight(prefs.reflowBackground)
+        val controller = WindowInsetsControllerCompat(window, binding.root)
+        controller.isAppearanceLightStatusBars = darkIcons
+        controller.isAppearanceLightNavigationBars = darkIcons
+    }
+
     private fun toggleBars() {
         barsVisible = !barsVisible
+        binding.reflowView.setChromeVisible(barsVisible)
         if (barsVisible) {
             binding.topBar.animate().translationY(0f).alpha(1f).setDuration(180).start()
             binding.bottomBar.animate().translationY(0f).alpha(1f).setDuration(180).start()
@@ -371,6 +514,7 @@ class ReaderActivity : AppCompatActivity() {
             binding.topBar.animate().translationY(-binding.topBar.height.toFloat()).alpha(0f).setDuration(180).start()
             binding.bottomBar.animate().translationY(binding.bottomBar.height.toFloat()).alpha(0f).setDuration(180).start()
         }
+        updateSystemBarIcons()
     }
 
     override fun onPause() {
@@ -381,6 +525,7 @@ class ReaderActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         activeSheet?.dismiss()
+        themeSheet?.dismiss()
         textJob?.cancel()
         runCatching { textExtractor?.close() }
         runCatching { renderer?.close() }

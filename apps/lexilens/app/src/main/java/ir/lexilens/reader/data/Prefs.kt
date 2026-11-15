@@ -38,8 +38,26 @@ class Prefs(context: Context) {
         get() = sp.getLong("last_backup_at", 0L)
         set(value) = sp.edit().putLong("last_backup_at", value).apply()
 
+    var reflowEnabled: Boolean
+        get() = sp.getBoolean("reflow_enabled", false)
+        set(value) = sp.edit().putBoolean("reflow_enabled", value).apply()
+
+    var reflowTextPercent: Int
+        get() = sp.getInt("reflow_text_percent", 100).coerceIn(65, 260)
+        set(value) = sp.edit().putInt("reflow_text_percent", value.coerceIn(65, 260)).apply()
+
+    var reflowBackground: Int
+        get() = sp.getInt("reflow_background", DEFAULT_REFLOW_BACKGROUND)
+        set(value) = sp.edit().putInt("reflow_background", value).apply()
+
+    var reflowTextColor: Int
+        get() = sp.getInt("reflow_text_color", DEFAULT_REFLOW_TEXT)
+        set(value) = sp.edit().putInt("reflow_text_color", value).apply()
+
     companion object {
         const val MAX_NEW_PER_DAY = 10_000
         const val MAX_REVIEWS_PER_DAY = 100_000
+        const val DEFAULT_REFLOW_BACKGROUND = 0xFFF6F4ED.toInt()
+        const val DEFAULT_REFLOW_TEXT = 0xFF14231E.toInt()
     }
 }

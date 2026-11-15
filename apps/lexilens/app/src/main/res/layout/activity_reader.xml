@@ -10,6 +10,12 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <ir.lexilens.reader.reader.ReflowPageView
+        android:id="@+id/reflow_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
     <LinearLayout
         android:id="@+id/top_bar"
         android:layout_width="match_parent"
@@ -58,6 +64,25 @@
         </LinearLayout>
 
         <ImageButton
+            android:id="@+id/reflow_button"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="بازچینش متن"
+            android:src="@drawable/ic_reflow"
+            app:tint="@color/white" />
+
+        <ImageButton
+            android:id="@+id/palette_button"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="رنگ متن و پس‌زمینه"
+            android:src="@drawable/ic_palette"
+            android:visibility="gone"
+            app:tint="@color/white" />
+
+        <ImageButton
             android:id="@+id/fit_button"
             android:layout_width="48dp"
             android:layout_height="48dp"
@@ -78,6 +103,59 @@
         android:paddingTop="6dp"
         android:paddingEnd="10dp"
         android:paddingBottom="10dp">
+
+        <LinearLayout
+            android:id="@+id/reflow_controls"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="2dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/text_size_label"
+                android:layout_width="46dp"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="۱۰۰٪"
+                android:textColor="#B3FFFFFF"
+                android:textSize="11sp" />
+
+            <SeekBar
+                android:id="@+id/text_size_seek"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="195"
+                android:progress="35"
+                android:progressBackgroundTint="#4DFFFFFF"
+                android:progressTint="@color/amber"
+                android:thumbTint="@color/amber" />
+
+            <TextView
+                android:id="@+id/text_smaller"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="متن کوچک‌تر"
+                android:gravity="center"
+                android:text="A−"
+                android:textColor="@color/white"
+                android:textSize="16sp" />
+
+            <TextView
+                android:id="@+id/text_larger"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="متن بزرگ‌تر"
+                android:gravity="center"
+                android:text="A+"
+                android:textColor="@color/white"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+        </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"

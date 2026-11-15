@@ -1,0 +1,290 @@
+package ir.lexilens.reader.pdf
+
+/** Maps a range of characters in a reflowed paragraph back to its PDF word. */
+data class ReflowWordSpan(val wordIndex: Int, val start: Int, val end: Int)
+
+data class ReflowParagraph(
+    val text: String,
+    val words: List<ReflowWordSpan>,
+) {
+    /**
+     * Returns the word nearest to [offset]. Spaces and punctuation between two
+     * words resolve to the closer one, which is what a long press on a space
+     * should do.
+     */
+    fun wordAt(offset: Int): Int? {
+        if (words.isEmpty()) return null
+        var best: ReflowWordSpan? = null
+        var bestDistance = Int.MAX_VALUE
+        for (span in words) {
+            if (offset >= span.start && offset < span.end) return span.wordIndex
+            val distance = when {
+                offset < span.start -> span.start - offset
+                else -> offset - span.end + 1
+            }
+            if (distance < bestDistance) {
+                bestDistance = distance
+                best = span
+            }
+        }
+        return best?.wordIndex
+    }
+}
+
+data class ReflowContent(val paragraphs: List<ReflowParagraph>) {
+    val isEmpty: Boolean get() = paragraphs.isEmpty()
+    val characterCount: Int get() = paragraphs.sumOf { it.text.length }
+
+    companion object {
+        val EMPTY = ReflowContent(emptyList())
+    }
+}
+
+/**
+ * Turns the fixed, line-by-line text of a PDF page into continuous paragraphs
+ * that can be laid out at any width and font size.
+ *
+ * The input is [PageText.lines] rather than [WordBox.text] on purpose: line
+ * text keeps commas, periods and question marks (the word boxes are cleaned
+ * for dictionary lookup), and punctuation is what makes the reflowed text
+ * readable and the voice natural.
+ */
+object ReflowText {
+
+    fun build(page: PageText): ReflowContent {
+        if (page.lines.isEmpty()) return ReflowContent.EMPTY
+        val lines = page.lines.filter { line ->
+            line.text.isNotBlank() && !isPageNumber(line, page)
+        }
+        if (lines.isEmpty()) return ReflowContent.EMPTY
+
+        val sections = orderReadingUnits(lines, page.width)
+        val medianHeight = median(lines.map { it.h }.filter { it > 0f })
+        val paragraphs = mutableListOf<ReflowParagraph>()
+        for (section in sections) {
+            paragraphs += buildSection(section, page, medianHeight)
+        }
+        return ReflowContent(paragraphs)
+    }
+
+    // ---------------------------------------------------------------- columns
+
+    /**
+     * Returns the lines in reading order. A single-column page is one unit.
+     * For a two-column page every column becomes its own unit, and full-width
+     * lines (titles, captions) split the page into horizontal bands so a title
+     * stays above the columns it belongs to.
+     */
+    private fun orderReadingUnits(lines: List<LineBox>, pageWidth: Float): List<List<LineBox>> {
+        val sorted = lines.sortedWith(compareBy({ it.y }, { it.x }))
+        if (pageWidth <= 1f || !looksTwoColumn(sorted, pageWidth)) return listOf(sorted)
+
+        val units = mutableListOf<List<LineBox>>()
+        var left = mutableListOf<LineBox>()
+        var right = mutableListOf<LineBox>()
+        fun flushColumns() {
+            if (left.isNotEmpty()) {
+                units.add(left.sortedWith(compareBy({ it.y }, { it.x })))
+                left = mutableListOf()
+            }
+            if (right.isNotEmpty()) {
+                units.add(right.sortedWith(compareBy({ it.y }, { it.x })))
+                right = mutableListOf()
+            }
+        }
+
+        for (line in sorted) {
+            when {
+                isSpanning(line, pageWidth) -> {
+                    flushColumns()
+                    units.add(listOf(line))
+                }
+                line.x + line.w / 2f < pageWidth * 0.5f -> left.add(line)
+                else -> right.add(line)
+            }
+        }
+        flushColumns()
+        return units.filter { it.isNotEmpty() }
+    }
+
+    private fun looksTwoColumn(lines: List<LineBox>, pageWidth: Float): Boolean {
+        if (lines.size < 8) return false
+        val left = lines.count { it.x + it.w / 2f < pageWidth * 0.5f && it.x < pageWidth * 0.42f }
+        val right = lines.count { it.x + it.w / 2f >= pageWidth * 0.5f && it.x > pageWidth * 0.40f }
+        if (left < 4 || right < 4) return false
+        val leftEdge = lines.filter { it.x + it.w / 2f < pageWidth * 0.5f }.maxOfOrNull { it.x + it.w } ?: 0f
+        val rightEdge = lines.filter { it.x + it.w / 2f >= pageWidth * 0.5f }.minOfOrNull { it.x } ?: pageWidth
+        // In a real two-column page the left column ends before the right one
+        // starts. Overlapping lines mean this is a single justified column.
+        return rightEdge - leftEdge > pageWidth * 0.02f
+    }
+
+    private fun isSpanning(line: LineBox, pageWidth: Float): Boolean =
+        line.w > pageWidth * 0.62f && line.x < pageWidth * 0.35f
+
+    // ------------------------------------------------------------- paragraphs
+
+    private fun buildSection(
+        lines: List<LineBox>,
+        page: PageText,
+        medianHeight: Float,
+    ): List<ReflowParagraph> {
+        val out = mutableListOf<ReflowParagraph>()
+        val text = StringBuilder()
+        val words = mutableListOf<ReflowWordSpan>()
+        var previous: LineBox? = null
+        var previousText: String? = null
+
+        fun flush() {
+            val value = text.toString().trim()
+            if (value.isNotEmpty()) out.add(ReflowParagraph(value, words.toList()))
+            text.setLength(0)
+            words.clear()
+        }
+
+        for (line in lines) {
+            val local = normalize(line.text)
+            if (local.isEmpty() || isSymbolLine(local)) continue
+            val prev = previous
+            val prevText = previousText
+            if (prev != null && prevText != null && startsNewParagraph(prev, line, prevText, medianHeight)) {
+                flush()
+            }
+            if (text.isEmpty()) {
+                text.append(local)
+                appendWordSpans(line, local, 0, page, words)
+            } else {
+                val joinHyphen = shouldJoinHyphen(prevText.orEmpty(), local)
+                if (joinHyphen) {
+                    while (text.isNotEmpty() && isHyphen(text.last())) text.setLength(text.length - 1)
+                } else if (needsSpace(text.last(), local.first())) {
+                    text.append(' ')
+                }
+                val offset = text.length
+                text.append(local)
+                appendWordSpans(line, local, offset, page, words)
+            }
+            previous = line
+            previousText = local
+        }
+        flush()
+        return out
+    }
+
+    private fun startsNewParagraph(
+        previous: LineBox,
+        current: LineBox,
+        previousText: String,
+        medianHeight: Float,
+    ): Boolean {
+        val height = maxOf(previous.h, current.h)
+        if (height > 0f) {
+            val gap = current.y - previous.bottom
+            if (gap > height * 1.7f) return true
+        }
+        if (looksLikeHeading(current, medianHeight) || looksLikeHeading(previous, medianHeight)) return true
+        if (startsBullet(current.text)) return true
+        // A first-line indent is the most common paragraph marker in books.
+        if (current.x - previous.x > maxOf(height, 1f) * 0.9f &&
+            !isHyphen(previousText.lastOrNull() ?: ' ')
+        ) return true
+        return false
+    }
+
+    private fun looksLikeHeading(line: LineBox, medianHeight: Float): Boolean {
+        if (medianHeight <= 0f) return false
+        val short = normalize(line.text).length <= 48
+        return short && line.h > medianHeight * 1.22f
+    }
+
+    private fun startsBullet(raw: String): Boolean {
+        val text = raw.trimStart()
+        if (text.isEmpty()) return false
+        if (text.first() in "•◦▪▫●○■□◆◇►▶–—*·") return true
+        return BULLET_NUMBER.matches(text.substring(0, minOf(text.length, 5)))
+    }
+
+    private fun isSymbolLine(text: String): Boolean {
+        var hasLetterOrDigit = false
+        for (ch in text) {
+            if (ch.isLetterOrDigit()) {
+                hasLetterOrDigit = true
+                break
+            }
+        }
+        return !hasLetterOrDigit && text.length <= 3
+    }
+
+    private fun shouldJoinHyphen(previous: String, current: String): Boolean {
+        if (previous.isEmpty() || current.isEmpty()) return false
+        val last = previous.last()
+        if (last != '-' && last != '\u00AD' && last != '\u2010') return false
+        val first = current.first()
+        return first.isLetterOrDigit()
+    }
+
+    private fun isHyphen(ch: Char): Boolean =
+        ch == '-' || ch == '\u00AD' || ch == '\u2010'
+
+    private fun needsSpace(last: Char, first: Char): Boolean {
+        if (last.isWhitespace() || first.isWhitespace()) return false
+        if (first in CLOSING_PUNCTUATION) return false
+        if (last in OPENING_PUNCTUATION) return false
+        return true
+    }
+
+    // ------------------------------------------------------------- word links
+
+    private fun appendWordSpans(
+        line: LineBox,
+        local: String,
+        offset: Int,
+        page: PageText,
+        out: MutableList<ReflowWordSpan>,
+    ) {
+        val startWord = line.wordStart.coerceAtLeast(0)
+        val endWord = line.wordEnd.coerceAtMost(page.words.lastIndex)
+        if (startWord > endWord) return
+        var cursor = 0
+        for (index in startWord..endWord) {
+            val word = page.words.getOrNull(index) ?: continue
+            val token = word.text
+            if (token.isEmpty()) continue
+            var at = local.indexOf(token, cursor, ignoreCase = true)
+            if (at < 0) at = local.indexOf(token, ignoreCase = true)
+            if (at < 0) {
+                val ratio = if (line.w > 0f) ((word.x - line.x) / line.w).coerceIn(0f, 1f) else 0f
+                at = (ratio * local.length).toInt().coerceIn(0, (local.length - token.length).coerceAtLeast(0))
+            }
+            val start = offset + at
+            val end = (start + token.length).coerceAtMost(offset + local.length)
+            if (end > start) out.add(ReflowWordSpan(index, start, end))
+            cursor = (at + token.length).coerceIn(0, local.length)
+        }
+    }
+
+    // ---------------------------------------------------------------- helpers
+
+    private fun normalize(raw: String): String =
+        raw.replace(Regex("\\s+"), " ").trim()
+
+    private fun isPageNumber(line: LineBox, page: PageText): Boolean {
+        val text = line.text.trim()
+        if (text.length > 6 || !PAGE_NUMBER.matches(text)) return false
+        return line.bottom < page.height * 0.12f || line.y > page.height * 0.88f
+    }
+
+    private fun median(values: List<Float>): Float {
+        if (values.isEmpty()) return 0f
+        val sorted = values.sorted()
+        return sorted[sorted.size / 2]
+    }
+
+    private const val BULLET_NUMBER_SOURCE = "\\s*(\\(?\\d{1,3}[.)]|[a-zA-Z][.)])(?=\\s)"
+    private val BULLET_NUMBER = Regex(BULLET_NUMBER_SOURCE)
+    private val PAGE_NUMBER = Regex(
+        "^[\\s\\p{Pd}]*([0-9]{1,4}|[ivxlcdmIVXLCDM]{1,6})[\\s\\p{Pd}]*$"
+    )
+    private const val CLOSING_PUNCTUATION = ".,;:!?…۔؟،؛»”’)]}"
+    private const val OPENING_PUNCTUATION = "«“‘([{"
+}
