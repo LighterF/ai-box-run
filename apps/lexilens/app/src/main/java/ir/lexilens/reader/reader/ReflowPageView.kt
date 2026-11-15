@@ -263,6 +263,7 @@ class ReflowPageView @JvmOverloads constructor(
         val textSize = 17f * (textSizePercent / 100f) * scaledDensity
         paint.textSize = textSize
         val paragraphGap = textSize * 0.72f
+        val blankLineGap = textSize * 1.15f
         var y = 0f
         if (content.isEmpty) {
             val message = emptyText
@@ -277,7 +278,7 @@ class ReflowPageView @JvmOverloads constructor(
                 emptyLayoutWidth = available.toInt()
             }
         } else {
-            for (paragraph in content.paragraphs) {
+            for ((index, paragraph) in content.paragraphs.withIndex()) {
                 val styled = styledParagraph(paragraph)
                 val layout = StaticLayout.Builder
                     .obtain(styled, 0, styled.length, paint, available.toInt())
@@ -287,11 +288,14 @@ class ReflowPageView @JvmOverloads constructor(
                     .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY)
                     .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_FULL)
                     .build()
+                if (index > 0) {
+                    val blankLines = paragraph.blankLinesBefore.coerceIn(0, MAX_KEPT_BLANK_LINES)
+                    y += paragraphGap + blankLines * blankLineGap
+                }
                 paragraphTops.add(y)
                 layouts.add(layout)
-                y += layout.height + paragraphGap
+                y += layout.height
             }
-            if (layouts.isNotEmpty()) y -= paragraphGap
         }
         contentBottom = topPadding + y + bottomPadding
         maxScroll = max(0, (contentBottom - height).toInt())
@@ -536,5 +540,6 @@ class ReflowPageView @JvmOverloads constructor(
     companion object {
         const val MIN_TEXT_PERCENT = 65
         const val MAX_TEXT_PERCENT = 260
+        private const val MAX_KEPT_BLANK_LINES = 4
     }
 }

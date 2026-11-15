@@ -1,5 +1,7 @@
 package ir.lexilens.reader.pdf
 
+import kotlin.math.roundToInt
+
 /** Maps a range of characters in a reflowed paragraph back to its PDF word. */
 data class ReflowWordSpan(
     val wordIndex: Int,
@@ -11,6 +13,13 @@ data class ReflowWordSpan(
 data class ReflowParagraph(
     val text: String,
     val words: List<ReflowWordSpan>,
+    /**
+     * Number of blank PDF lines that separated this paragraph from the previous
+     * one. The reflow view turns this into extra vertical space so deliberate
+     * double line breaks (scene breaks in a story, for example) survive the
+     * conversion instead of collapsing into a normal paragraph gap.
+     */
+    val blankLinesBefore: Int = 0,
 ) {
     /**
      * Returns the word nearest to [offset]. Spaces and punctuation between two
@@ -192,12 +201,17 @@ object ReflowText {
         val words = mutableListOf<ReflowWordSpan>()
         var previous: LineBox? = null
         var previousText: String? = null
+        var pendingBlankLines = 0
+        val normalAdvance = normalLineAdvance(lines, medianHeight)
 
         fun flush() {
             val value = text.toString().trim()
-            if (value.isNotEmpty()) out.add(ReflowParagraph(value, words.toList()))
+            if (value.isNotEmpty()) {
+                out.add(ReflowParagraph(value, words.toList(), pendingBlankLines))
+            }
             text.setLength(0)
             words.clear()
+            pendingBlankLines = 0
         }
 
         for (line in lines) {
@@ -213,10 +227,12 @@ object ReflowText {
             }
             val prev = previous
             val prevText = previousText
+            val blankLines = if (prev == null) 0 else blankLinesBefore(prev, line, normalAdvance)
             if (prev != null && prevText != null &&
-                startsNewParagraph(prev, line, prevText, medianHeight, rtl)
+                startsNewParagraph(prev, line, prevText, medianHeight, rtl, blankLines)
             ) {
                 flush()
+                pendingBlankLines = blankLines
             }
             if (text.isEmpty()) {
                 text.append(local)
@@ -245,7 +261,9 @@ object ReflowText {
         previousText: String,
         medianHeight: Float,
         rtl: Boolean,
+        blankLines: Int,
     ): Boolean {
+        if (blankLines > 0) return true
         val height = maxOf(previous.h, current.h)
         if (height > 0f) {
             val gap = current.y - previous.bottom
@@ -264,6 +282,33 @@ object ReflowText {
             !isHyphen(previousText.lastOrNull() ?: ' ')
         ) return true
         return false
+    }
+
+    /**
+     * Typical baseline-to-baseline distance in this reading unit, ignoring the
+     * unusually large gaps that are the paragraph breaks themselves.
+     */
+    private fun normalLineAdvance(lines: List<LineBox>, medianHeight: Float): Float {
+        val limit = if (medianHeight > 0f) medianHeight * 1.6f else Float.MAX_VALUE
+        val advances = lines.zipWithNext { above, below -> below.y - above.y }
+            .filter { it > 0f && it <= limit }
+        val normal = median(advances)
+        return if (normal > 0f) normal else medianHeight
+    }
+
+    /**
+     * Counts the empty PDF lines between two text lines. One normal line step
+     * means no blank line, two steps mean one empty line, and so on.
+     */
+    private fun blankLinesBefore(
+        previous: LineBox,
+        current: LineBox,
+        normalAdvance: Float,
+    ): Int {
+        if (normalAdvance <= 0f) return 0
+        val steps = (current.y - previous.y) / normalAdvance
+        if (!steps.isFinite() || steps <= 1f) return 0
+        return (steps.roundToInt() - 1).coerceAtLeast(0).coerceAtMost(MAX_BLANK_LINES)
     }
 
     private fun looksLikeHeading(line: LineBox, medianHeight: Float): Boolean {
@@ -365,4 +410,5 @@ object ReflowText {
     )
     private const val CLOSING_PUNCTUATION = ".,;:!?…۔؟،؛»”’)]}"
     private const val OPENING_PUNCTUATION = "«“‘([{"
+    private const val MAX_BLANK_LINES = 8
 }

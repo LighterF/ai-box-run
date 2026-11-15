@@ -72,6 +72,36 @@ class ReflowTextTest {
 
         assertEquals(2, content.paragraphs.size)
         assertEquals("Second paragraph is indented.", content.paragraphs[1].text)
+        assertEquals(0, content.paragraphs[1].blankLinesBefore)
+    }
+
+    @Test
+    fun keepsTheExtraSpaceOfABlankLineBetweenParagraphs() {
+        val page = page(
+            Spec("First paragraph fills the whole line and continues", 10f, 10f),
+            Spec("to here.", 10f, 26f),
+            Spec("Scene break after one empty line.", 45f, 54f),
+        )
+
+        val content = ReflowText.build(page)
+
+        assertEquals(2, content.paragraphs.size)
+        assertEquals(0, content.paragraphs[0].blankLinesBefore)
+        assertEquals(1, content.paragraphs[1].blankLinesBefore)
+    }
+
+    @Test
+    fun keepsMultipleBlankLinesBetweenParagraphs() {
+        val page = page(
+            Spec("First paragraph stays here.", 10f, 10f),
+            Spec("It ends on this line.", 10f, 26f),
+            Spec("Two empty lines separate this scene.", 10f, 72f),
+        )
+
+        val content = ReflowText.build(page)
+
+        assertEquals(2, content.paragraphs.size)
+        assertEquals(2, content.paragraphs[1].blankLinesBefore)
     }
 
     @Test

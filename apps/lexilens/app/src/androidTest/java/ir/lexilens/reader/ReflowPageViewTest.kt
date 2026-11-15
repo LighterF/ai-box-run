@@ -9,6 +9,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import ir.lexilens.reader.pdf.LineBox
 import ir.lexilens.reader.pdf.PageText
+import ir.lexilens.reader.pdf.ReflowContent
 import ir.lexilens.reader.pdf.ReflowText
 import ir.lexilens.reader.pdf.WordBox
 import ir.lexilens.reader.reader.ReflowPageView
@@ -182,6 +183,55 @@ class ReflowPageViewTest {
         up.recycle()
     }
 
+    @Test
+    fun blankLinesAddVisibleSpaceBetweenParagraphs() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val words = listOf(
+            WordBox("Alpha", 10f, 10f, 40f, 12f, 0),
+            WordBox("Beta", 10f, 60f, 32f, 12f, 1),
+        )
+        val lines = listOf(
+            LineBox("Alpha", 10f, 10f, 40f, 12f, 0, 0),
+            LineBox("Beta", 10f, 60f, 32f, 12f, 1, 1),
+        )
+        val page = PageText(600f, 800f, words, lines)
+        val base = ReflowText.build(page)
+        assertTrue("the gap should split the page into paragraphs", base.paragraphs.size >= 2)
+        val secondWord = base.paragraphs[1].words.first().wordIndex
+
+        fun topOf(content: ReflowContent): Float {
+            val view = ReflowPageView(context).apply {
+                setChromeVisible(false)
+                pageBackground = Color.WHITE
+                pageTextColor = Color.BLACK
+                textSizePercent = 100
+                setContent(content)
+            }
+            layout(view)
+            return firstHitRowFor(view, secondWord) ?: Float.MAX_VALUE
+        }
+
+        val tight = ReflowContent(
+            base.paragraphs.mapIndexed { index, paragraph ->
+                if (index == 0) paragraph else paragraph.copy(blankLinesBefore = 0)
+            }
+        )
+        val spaced = ReflowContent(
+            base.paragraphs.mapIndexed { index, paragraph ->
+                if (index == 0) paragraph else paragraph.copy(blankLinesBefore = 2)
+            }
+        )
+        val tightTop = topOf(tight)
+        val spacedTop = topOf(spaced)
+
+        assertTrue("both layouts must show the second paragraph", tightTop < Float.MAX_VALUE && spacedTop < Float.MAX_VALUE)
+        val density = context.resources.displayMetrics.density
+        assertTrue(
+            "two blank lines should add real space (tight=$tightTop spaced=$spacedTop)",
+            spacedTop - tightTop > 24f * density,
+        )
+    }
+
     private fun layout(view: ReflowPageView) {
         view.measure(
             android.view.View.MeasureSpec.makeMeasureSpec(width, android.view.View.MeasureSpec.EXACTLY),
@@ -222,6 +272,19 @@ class ReflowPageViewTest {
                 x += 9
             }
             y += 9
+        }
+        return null
+    }
+
+    private fun firstHitRowFor(view: ReflowPageView, wordIndex: Int): Float? {
+        var y = 0
+        while (y < height) {
+            var x = 0
+            while (x < width) {
+                if (view.wordIndexAt(x.toFloat(), y.toFloat()) == wordIndex) return y.toFloat()
+                x += 9
+            }
+            y += 3
         }
         return null
     }

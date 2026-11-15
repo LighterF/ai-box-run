@@ -85,6 +85,7 @@ class ReflowHitAccuracyTest {
         val topPadding = 30f * density
         val textSize = 17f * scaledDensity
         val paragraphGap = textSize * 0.72f
+        val blankLineGap = textSize * 1.15f
         val paint = TextPaint(TextPaint.ANTI_ALIAS_FLAG).apply {
             typeface = Typeface.create(Typeface.SERIF, Typeface.NORMAL)
             this.textSize = textSize
@@ -101,6 +102,9 @@ class ReflowHitAccuracyTest {
                 .setBreakStrategy(Layout.BREAK_STRATEGY_HIGH_QUALITY)
                 .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_FULL)
                 .build()
+            if (pIndex > 0) {
+                paragraphTop += paragraphGap + paragraph.blankLinesBefore.coerceIn(0, 4) * blankLineGap
+            }
             for (span in paragraph.words) {
                 val token = page.words.getOrNull(span.wordIndex) ?: continue
                 val drawn = paragraph.text.substring(span.start, span.end.coerceAtMost(paragraph.text.length))
@@ -139,7 +143,7 @@ class ReflowHitAccuracyTest {
                     }
                 }
             }
-            paragraphTop += layout.height + paragraphGap
+            paragraphTop += layout.height
         }
         assertTrue("$asset had too few checked spans ($checked)", checked > 20)
         return mismatches
